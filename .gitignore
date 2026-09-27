@@ -1,0 +1,13 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Data + generated artifacts
+analytics/*.png
+hive-crash.log
+
+# Local debug leftovers
+_check_stack.sh
+query2.js
