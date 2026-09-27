@@ -1,0 +1,185 @@
+version: "3.8"
+
+services:
+  # ─── HDFS ─────────────────────────────────────────────────
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: namenode
+    restart: unless-stopped
+    ports:
+      - "9870:9870"   # Web UI
+      - "9000:9000"   # HDFS RPC
+    volumes:
+      - hadoop_namenode:/hadoop/dfs/name
+    environment:
+      - CLUSTER_NAME=bda-cluster
+    env_file:
+      - ./hadoop.env
+    networks:
+      - bda-network
+
+  datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode
+    restart: unless-stopped
+    ports:
+      - "9864:9864"
+    volumes:
+      - hadoop_datanode:/hadoop/dfs/data
+    environment:
+      - SERVICE_PRECONDITION=namenode:9870
+    env_file:
+      - ./hadoop.env
+    depends_on:
+      - namenode
+    networks:
+      - bda-network
+
+  # ─── YARN ─────────────────────────────────────────────────
+  resourcemanager:
+    image: bde2020/hadoop-resourcemanager:2.0.0-hadoop3.2.1-java8
+    container_name: resourcemanager
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    environment:
+      - SERVICE_PRECONDITION=namenode:9000 namenode:9870 datanode:9864
+    env_file:
+      - ./hadoop.env
+    depends_on:
+      - namenode
+      - datanode
+    networks:
+      - bda-network
+
+  nodemanager:
+    image: bde2020/hadoop-nodemanager:2.0.0-hadoop3.2.1-java8
+    container_name: nodemanager
+    restart: unless-stopped
+    ports:
+      - "8042:8042"
+    environment:
+      - SERVICE_PRECONDITION=namenode:9000 namenode:9870 datanode:9864 resourcemanager:8088
+    env_file:
+      - ./hadoop.env
+    depends_on:
+      - namenode
+      - datanode
+      - resourcemanager
+    networks:
+      - bda-network
+
+  # ─── HIVE ─────────────────────────────────────────────────
+  hive-metastore-postgresql:
+    image: bde2020/hive-metastore-postgresql:2.3.0
+    container_name: hive-metastore-postgresql
+    restart: unless-stopped
+    volumes:
+      - hive_postgresql:/var/lib/postgresql/data
+    networks:
+      - bda-network
+
+  hive-metastore:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    container_name: hive-metastore
+    restart: unless-stopped
+    tmpfs:
+      - /tmp
+    ports:
+      - "9083:9083"
+    environment:
+      - SERVICE_PRECONDITION=namenode:9870 datanode:9864 hive-metastore-postgresql:5432
+      - HADOOP_HEAPSIZE=2048
+      - HIVE_SITE_CONF_javax_jdo_option_ConnectionURL=jdbc:postgresql://hive-metastore-postgresql/metastore
+      - HIVE_SITE_CONF_javax_jdo_option_ConnectionDriverName=org.postgresql.Driver
+      - HIVE_SITE_CONF_javax_jdo_option_ConnectionUserName=hive
+      - HIVE_SITE_CONF_javax_jdo_option_ConnectionPassword=hive
+    env_file:
+      - ./hadoop.env
+    command: /opt/hive/bin/hive --service metastore
+    depends_on:
+      - namenode
+      - datanode
+      - hive-metastore-postgresql
+    networks:
+      - bda-network
+
+  hive-server:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    container_name: hive-server
+    restart: unless-stopped
+    tmpfs:
+      - /tmp
+    ports:
+      - "10000:10000"
+      - "10002:10002"
+    environment:
+      - SERVICE_PRECONDITION=hive-metastore:9083
+      - HADOOP_HEAPSIZE=2048
+      - HIVE_SITE_CONF_javax_jdo_option_ConnectionURL=jdbc:postgresql://hive-metastore-postgresql/metastore
+      - HIVE_SITE_CONF_javax_jdo_option_ConnectionDriverName=org.postgresql.Driver
+      - HIVE_SITE_CONF_javax_jdo_option_ConnectionUserName=hive
+      - HIVE_SITE_CONF_javax_jdo_option_ConnectionPassword=hive
+    env_file:
+      - ./hadoop.env
+    depends_on:
+      - hive-metastore
+    networks:
+      - bda-network
+
+  # ─── SPARK ────────────────────────────────────────────────
+  spark-master:
+    image: bde2020/spark-master:3.1.1-hadoop3.2
+    container_name: spark-master
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    environment:
+      - SPARK_DAEMON_MEMORY=512m
+    env_file:
+      - ./hadoop.env
+    networks:
+      - bda-network
+
+  spark-worker:
+    image: bde2020/spark-worker:3.1.1-hadoop3.2
+    container_name: spark-worker
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      - SPARK_MASTER=spark://spark-master:7077
+      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_DAEMON_MEMORY=512m
+    env_file:
+      - ./hadoop.env
+    depends_on:
+      - spark-master
+    networks:
+      - bda-network
+
+  # ─── MONGODB ──────────────────────────────────────────────
+  mongo:
+    image: mongo:6.0
+    container_name: mongo
+    restart: unless-stopped
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo_data:/data/db
+    command: ["mongod", "--wiredTigerCacheSizeGB", "0.25"]
+    networks:
+      - bda-network
+
+networks:
+  bda-network:
+    driver: bridge
+    name: bda-network
+
+volumes:
+  hadoop_namenode:
+  hadoop_datanode:
+  hive_postgresql:
+  mongo_data:
