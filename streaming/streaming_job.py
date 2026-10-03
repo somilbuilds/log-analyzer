@@ -40,6 +40,37 @@ from dgim import DGIM
 from flajolet_martin import FlajoletMartin
 
 
+def _as_dict(rec):
+    if isinstance(rec, dict):
+        return rec
+    return {
+        "host": rec["host"],
+        "timestamp": rec["timestamp"],
+        "method": rec["method"],
+        "path": rec["path"],
+        "status": rec["status"],
+        "bytes": rec["bytes"],
+    }
+
+
+def persist_recent_events(db, window_id, records, sample=36):
+    docs = []
+    for seq, rec in enumerate(records[:sample]):
+        item = _as_dict(rec)
+        docs.append({
+            "window_id": window_id,
+            "seq": seq,
+            "ts": item.get("timestamp"),
+            "host": item.get("host"),
+            "method": item.get("method"),
+            "path": item.get("path"),
+            "status": item.get("status"),
+            "bytes": item.get("bytes") or 0,
+        })
+    if docs:
+        db.recent_events.insert_many(docs)
+
+
 def run_spark_streaming(args):
     """Run the PySpark Structured Streaming pipeline."""
     from pyspark.sql import SparkSession
@@ -242,12 +273,14 @@ def run_spark_streaming(args):
                 ),
             })
 
+            persist_recent_events(db, window_id, rows)
             client.close()
-            print(f"[Window {window_id}] {total_requests} requests | "
-                  f"Error rate: {error_rate:.2%} | "
-                  f"Bloom new/seen: {new_hosts}/{seen_hosts} | "
-                  f"DGIM approx 5xx: {dgim_approx} (exact: {exact_5xx_count['value']}) | "
-                  f"FM distinct: {fm_estimate} (exact: {exact_distinct})")
+            print(
+                f"[w{window_id}] req={total_requests} err={error_rate:.1%} "
+                f"bloom={new_hosts}/{seen_hosts} "
+                f"dgim={dgim_approx}/{exact_5xx_count['value']} "
+                f"fm={fm_estimate}/{exact_distinct}"
+            )
 
         except Exception as e:
             print(f"[Window {window_id}] Error writing to MongoDB: {e}")
@@ -275,9 +308,7 @@ def run_local_mode(args):
     from pymongo import MongoClient
     import glob
 
-    print("[LocalMode] Starting local processing...")
-    print(f"[LocalMode] Input dir: {args.input_dir}")
-    print(f"[LocalMode] MongoDB: {args.mongo_uri}")
+    print(f"[stream] local mode  in={args.input_dir}  mongo={args.mongo_uri}")
 
     bloom = BloomFilter(expected_elements=50000, fp_rate=0.01)
     dgim_tracker = DGIM(window_size=5000)
@@ -287,7 +318,7 @@ def run_local_mode(args):
     db = client.get_default_database()
 
     # Clear old data
-    for coll in ["window_aggregates", "bloom_stats", "dgim_stats", "fm_stats"]:
+    for coll in ["window_aggregates", "bloom_stats", "dgim_stats", "fm_stats", "recent_events"]:
         db[coll].drop()
 
     exact_5xx_count = 0
@@ -295,7 +326,7 @@ def run_local_mode(args):
     window_id = 0
     processed_files = set()
 
-    print("[LocalMode] Watching for JSON files... (Ctrl+C to stop)")
+    print("[stream] watching for batches")
 
     try:
         while True:
@@ -317,7 +348,7 @@ def run_local_mode(args):
                                 batch_records.append(json.loads(line))
                     processed_files.add(fpath)
                 except Exception as e:
-                    print(f"[LocalMode] Error reading {fpath}: {e}")
+                    print(f"[stream] skip {os.path.basename(fpath)}: {e}")
                     processed_files.add(fpath)
 
             if not batch_records:
@@ -410,26 +441,16 @@ def run_local_mode(args):
                 ),
             })
 
-            print(f"[Window {window_id}] {total_requests} reqs | "
-                  f"Err: {error_rate:.2%} | "
-                  f"Bloom new/seen: {new_hosts}/{seen_hosts} | "
-                  f"DGIM 5xx: {dgim_approx} (exact: {exact_5xx_count}) | "
-                  f"FM distinct: {fm_estimate} (exact: {exact_distinct})")
-
-            # Also write raw records to a local Parquet-like JSON archive
-            archive_dir = os.path.join(args.input_dir, "..", "archive")
-            os.makedirs(archive_dir, exist_ok=True)
-            archive_file = os.path.join(
-                archive_dir,
-                f"window_{window_id:06d}.jsonl"
+            persist_recent_events(db, window_id, batch_records)
+            print(
+                f"[w{window_id}] req={total_requests} err={error_rate:.1%} "
+                f"bloom={new_hosts}/{seen_hosts} "
+                f"dgim={dgim_approx}/{exact_5xx_count} "
+                f"fm={fm_estimate}/{exact_distinct}"
             )
-            with open(archive_file, "w") as f:
-                for rec in batch_records:
-                    f.write(json.dumps(rec) + "\n")
 
     except KeyboardInterrupt:
-        print(f"\n[LocalMode] Stopped. Processed {window_id} windows, "
-              f"{len(processed_files)} files.")
+        print(f"[stream] stopped windows={window_id} files={len(processed_files)}")
     finally:
         client.close()
 

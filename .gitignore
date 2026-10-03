@@ -1,13 +1,15 @@
-# Python
 .venv/
 __pycache__/
 *.pyc
-*.pyo
-
-# Data + generated artifacts
-analytics/*.png
-hive-crash.log
-
-# Local debug leftovers
-_check_stack.sh
-query2.js
+node_modules/
+node-v20.11.1-linux-x64/
+/tmp/
+*.log
+.DS_Store
+frontend/dist/
+logs/
+.run/
+data/raw/access_log
+data/raw/*.gz
+data/raw/clarknet*
+!data/raw/.gitkeep

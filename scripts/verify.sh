@@ -40,7 +40,7 @@ docker exec namenode hdfs dfs -ls /
 echo ""
 echo "=== 7. Upload raw log to HDFS ==="
 # Copy log file into namenode container first
-docker cp /home/dsomil/projects/bdaproject/data/raw/access_log namenode:/tmp/access_log
+docker cp "$(cd "$(dirname "$0")/.." && pwd)/data/raw/access_log" namenode:/tmp/access_log
 docker exec namenode hdfs dfs -mkdir -p /user/data/raw_logs
 docker exec namenode hdfs dfs -put -f /tmp/access_log /user/data/raw_logs/
 echo "Uploaded. Verifying:"

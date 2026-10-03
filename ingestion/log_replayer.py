@@ -67,7 +67,7 @@ DDOS_IPS = [
 ]
 
 
-def parse_clf_line(line: str) -> dict | None:
+def parse_clf_line(line):
     """Parse a single CLF log line into a structured dict."""
     line = line.strip()
     if not line:
@@ -139,65 +139,62 @@ def replay(args):
     output_dir = args.output_dir
     os.makedirs(output_dir, exist_ok=True)
 
-    # Read all lines
-    print(f"[Replayer] Reading log file: {args.input}")
-    with open(args.input, "r", errors="replace") as f:
-        lines = f.readlines()
-
-    total_lines = len(lines)
-    print(f"[Replayer] Total lines: {total_lines}")
-    print(f"[Replayer] Speed factor: {args.speed}x")
-    print(f"[Replayer] Batch size: {args.batch_size}")
-    print(f"[Replayer] Output dir: {output_dir}")
+    print(f"[Replayer] input={args.input}")
+    print(f"[Replayer] speed={args.speed}x batch={args.batch_size} out={output_dir}")
     if args.inject_anomaly:
-        print(f"[Replayer] Anomaly injection: {args.anomaly_type} "
-              f"from line {args.anomaly_start} for {args.anomaly_duration} lines")
+        print(f"[Replayer] anomaly={args.anomaly_type} "
+              f"lines {args.anomaly_start}..{args.anomaly_start + args.anomaly_duration}")
 
     batch = []
     batch_num = 0
     parsed_count = 0
     skipped_count = 0
 
-    for i, line in enumerate(lines):
-        record = parse_clf_line(line)
-        if record is None:
-            skipped_count += 1
-            continue
+    if getattr(args, 'resume', False):
+        try:
+            existing_batches = [int(f.split('_')[1]) for f in os.listdir(output_dir) if f.startswith('batch_')]
+            if existing_batches:
+                batch_num = max(existing_batches) + 1
+        except Exception:
+            pass
 
-        # Inject anomaly if in the anomaly window
-        if args.inject_anomaly:
-            if args.anomaly_start <= i < args.anomaly_start + args.anomaly_duration:
-                record = inject_anomaly(record, args.anomaly_type)
+    skip_records = batch_num * args.batch_size
 
-        # Add replay timestamp (wall-clock time for the dashboard)
-        record["replay_timestamp"] = datetime.utcnow().isoformat()
+    with open(args.input, "r", errors="replace") as f:
+        for i, line in enumerate(f):
+            record = parse_clf_line(line)
+            if record is None:
+                skipped_count += 1
+                continue
 
-        batch.append(record)
-        parsed_count += 1
+            if skip_records > 0:
+                skip_records -= 1
+                parsed_count += 1
+                continue
 
-        if len(batch) >= args.batch_size:
-            write_batch(batch, output_dir, batch_num)
-            batch_num += 1
-            batch = []
+            if args.inject_anomaly:
+                if args.anomaly_start <= i < args.anomaly_start + args.anomaly_duration:
+                    record = inject_anomaly(record, args.anomaly_type)
 
-            # Rate control: sleep to simulate compressed real-time
-            # With speed=500 and batch_size=100, we produce 100 records
-            # then sleep briefly so Spark can keep up
-            sleep_time = args.batch_size / (args.speed * 10)
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+            record["replay_timestamp"] = datetime.utcnow().isoformat()
+            batch.append(record)
+            parsed_count += 1
 
-            if batch_num % 50 == 0:
-                print(f"[Replayer] Written {batch_num} batches "
-                      f"({parsed_count} records, {skipped_count} skipped)")
+            if len(batch) >= args.batch_size:
+                write_batch(batch, output_dir, batch_num)
+                batch_num += 1
+                batch = []
+                sleep_time = args.batch_size / (args.speed * 10)
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                if batch_num == 1 or batch_num % 200 == 0:
+                    print(f"[Replayer] batches={batch_num} parsed={parsed_count} skipped={skipped_count}")
 
-    # Flush remaining
     if batch:
         write_batch(batch, output_dir, batch_num)
         batch_num += 1
 
-    print(f"[Replayer] Done! {batch_num} batches, "
-          f"{parsed_count} records parsed, {skipped_count} skipped")
+    print(f"[Replayer] done batches={batch_num} parsed={parsed_count} skipped={skipped_count}")
 
 
 def main():
@@ -217,6 +214,8 @@ def main():
                         help="Line number to start injecting anomalies (default: 5000)")
     parser.add_argument("--anomaly-duration", type=int, default=2000,
                         help="Number of lines to inject anomalies for (default: 2000)")
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume from last processed batch")
     args = parser.parse_args()
     replay(args)
 
