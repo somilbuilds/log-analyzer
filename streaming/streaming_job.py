@@ -308,7 +308,7 @@ def run_local_mode(args):
     from pymongo import MongoClient
     import glob
 
-    print(f"[stream] local mode  in={args.input_dir}  mongo={args.mongo_uri}")
+    print(f"[stream] local mode  in={args.input_dir}  mongo={args.mongo_uri} resume={args.resume}")
 
     bloom = BloomFilter(expected_elements=50000, fp_rate=0.01)
     dgim_tracker = DGIM(window_size=5000)
@@ -317,14 +317,41 @@ def run_local_mode(args):
     client = MongoClient(args.mongo_uri)
     db = client.get_default_database()
 
-    # Clear old data
-    for coll in ["window_aggregates", "bloom_stats", "dgim_stats", "fm_stats", "recent_events"]:
-        db[coll].drop()
-
     exact_5xx_count = 0
     exact_distinct_hosts = set()
     window_id = 0
     processed_files = set()
+
+    if args.resume:
+        latest_window = db.window_aggregates.find_one({}, {"_id": 0, "window_id": 1}, sort=[("window_id", -1)])
+        latest_dgim = db.dgim_stats.find_one({}, {"_id": 0, "exact_5xx_total": 1}, sort=[("window_id", -1)])
+        window_id = int((latest_window or {}).get("window_id") or 0)
+        exact_5xx_count = int((latest_dgim or {}).get("exact_5xx_total") or 0)
+
+        # Rebuild in-memory stream-mining structures from already-produced
+        # files, but do not write duplicate MongoDB windows.
+        for fpath in sorted(glob.glob(os.path.join(args.input_dir, "*.json"))):
+            try:
+                with open(fpath, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        rec = json.loads(line)
+                        host = rec.get("host", "unknown")
+                        status = rec.get("status", 0)
+                        bloom.add_and_check(host)
+                        dgim_tracker.add_bit(1 if 500 <= status < 600 else 0)
+                        fm_estimator.add(host)
+                        exact_distinct_hosts.add(host)
+                processed_files.add(fpath)
+            except Exception as e:
+                print(f"[stream] resume skip {os.path.basename(fpath)}: {e}")
+                processed_files.add(fpath)
+        print(f"[stream] resumed at window={window_id} files={len(processed_files)}")
+    else:
+        for coll in ["window_aggregates", "bloom_stats", "dgim_stats", "fm_stats", "recent_events"]:
+            db[coll].drop()
 
     print("[stream] watching for batches")
 
@@ -471,6 +498,8 @@ def main():
                         help="Spark master URL")
     parser.add_argument("--mode", choices=["spark", "local"], default="local",
                         help="Run mode: 'spark' for cluster, 'local' for standalone")
+    parser.add_argument("--resume", action="store_true",
+                        help="Preserve MongoDB graph data and continue after existing stream files")
     args = parser.parse_args()
 
     if args.mode == "local":
@@ -481,3 +510,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

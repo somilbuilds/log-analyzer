@@ -1,37 +1,44 @@
-import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
 import Home from './pages/Home'
 import SparkDashboard from './pages/SparkDashboard'
 import MapReduceDashboard from './pages/MapReduceDashboard'
 import './index.css'
 
 function Layout({ children }) {
-  const location = useLocation()
-  const isHome = location.pathname === '/'
-
-  if (isHome) return children
-
   return (
     <div className="layout-wrapper">
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <span style={{ fontSize: '1.4rem' }}>⚡</span>
-          <h2>Log Analyzer</h2>
+          <div className="brand-mark">CN</div>
+          <div>
+            <h2>ClarkNet Analytics</h2>
+            <p>1995 HTTP archive</p>
+          </div>
         </div>
-        <nav className="sidebar-nav">
-          <Link to="/" className="nav-item">
-            <span className="nav-icon">🏠</span> Home
-          </Link>
-          <Link to="/spark" className={`nav-item ${location.pathname === '/spark' ? 'active' : ''}`}>
-            <span className="nav-icon">🌊</span> Live Spark
-          </Link>
-          <Link to="/mapreduce" className={`nav-item ${location.pathname === '/mapreduce' ? 'active' : ''}`}>
-            <span className="nav-icon">📦</span> Batch MapReduce
-          </Link>
+
+        <nav className="sidebar-nav" aria-label="Primary navigation">
+          <NavLink to="/" end className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+            <span className="nav-icon">OV</span>
+            Overview
+          </NavLink>
+          <NavLink to="/spark" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+            <span className="nav-icon">ST</span>
+            Streaming
+          </NavLink>
+          <NavLink to="/mapreduce" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+            <span className="nav-icon">MR</span>
+            Batch
+          </NavLink>
         </nav>
+
+        <div className="sidebar-meta">
+          <span>Dataset</span>
+          <strong>ClarkNet HTTP</strong>
+          <small>3.33M requests · 327.5 MB</small>
+        </div>
       </aside>
-      <div className="main-content">
-        {children}
-      </div>
+
+      <main className="main-content">{children}</main>
     </div>
   )
 }
