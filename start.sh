@@ -35,7 +35,7 @@ PY
 first_free_port() {
   local port="$1"
   while ! port_free "$port"; do
-    log "port $port is occupied; trying $((port + 1))"
+    log "port $port is occupied; trying $((port + 1))" >&2
     port=$((port + 1))
   done
   printf '%s' "$port"
@@ -169,3 +169,4 @@ sleep 1
 tail -n +1 -F "$LOG_DIR/api.log" "$LOG_DIR/frontend.log" "$LOG_DIR/replayer.log" "$LOG_DIR/stream.log" "$LOG_DIR/mapreduce.log" &
 TAIL_PID=$!
 wait "$TAIL_PID"
+
