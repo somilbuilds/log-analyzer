@@ -4,7 +4,7 @@ import subprocess
 import shutil
 from datetime import datetime
 
-from fastapi import FastAPI
+from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -14,6 +14,7 @@ from api.queries import (
     fetch_bloom_stats, fetch_dgim_stats, fetch_fm_stats,
     fetch_recent_events, mongo_ok,
 )
+from api.hadoop import get_hdfs_status, get_mapreduce_results, run_mapreduce_job, get_dataset_info
 
 app = FastAPI(title="Log Analyzer API", docs_url="/docs")
 
@@ -25,7 +26,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-demo_procs = {"replayer": None, "stream": None}
+demo_procs = {"replayer": None, "stream": None, "mapreduce": None}
 
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 log_replayer_script = os.path.join(base_dir, "ingestion", "log_replayer.py")
@@ -50,7 +51,6 @@ def _kill_proc(proc):
         return
     try:
         if proc.poll() is None:
-            # We used start_new_session=True, so we must kill the process group
             pgid = os.getpgid(proc.pid)
             os.killpg(pgid, signal.SIGTERM)
             try:
@@ -81,6 +81,53 @@ def status():
     return data
 
 
+@app.get("/api/dataset")
+def dataset_info():
+    return get_dataset_info()
+
+@app.get("/api/hdfs/status")
+def hdfs_status():
+    return get_hdfs_status()
+
+@app.get("/api/mapreduce/results")
+def mapreduce_results():
+    return get_mapreduce_results()
+
+@app.get("/api/mapreduce/status")
+def mapreduce_status():
+    proc = demo_procs.get("mapreduce")
+    if proc is None:
+        return {"running": False, "status": "idle"}
+    if proc.poll() is None:
+        return {"running": True, "status": "running"}
+    
+    return {"running": False, "status": "completed" if proc.returncode == 0 else "failed", "code": proc.returncode}
+
+
+@app.post("/api/mapreduce/run")
+def start_mapreduce():
+    proc = demo_procs.get("mapreduce")
+    if proc and proc.poll() is None:
+        return {"status": "error", "detail": "MapReduce job already running"}
+        
+    try:
+        # Copy log file and batch directory to the namenode container
+        subprocess.run(["docker", "cp", raw_access_log, "namenode:/tmp/access_log"], check=False)
+        batch_dir = os.path.join(base_dir, "batch")
+        subprocess.run(["docker", "cp", batch_dir, "namenode:/tmp/batch"], check=False)
+
+        log_file = open(os.path.join(log_dir, "mapreduce.log"), "w")
+        demo_procs["mapreduce"] = subprocess.Popen(
+            ["docker", "exec", "namenode", "bash", "/tmp/batch/run_mapreduce.sh"],
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True
+        )
+        return {"status": "started"}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+
 @app.get("/api/metrics")
 def metrics(limit: int = 120):
     return {
@@ -106,8 +153,8 @@ def start_demo(resume: bool = False):
             shutil.rmtree(tmp_stream_dir, ignore_errors=True)
     os.makedirs(tmp_stream_dir, exist_ok=True)
 
-    for key in list(demo_procs):
-        _kill_proc(demo_procs[key])
+    for key in ["replayer", "stream"]:
+        _kill_proc(demo_procs.get(key))
         demo_procs[key] = None
 
     env = os.environ.copy()
@@ -127,7 +174,7 @@ def start_demo(resume: bool = False):
             "--anomaly-start", "4000",
             "--anomaly-duration", "1600",
         ]
-    if getattr(locals().get("resume"), "real", resume):
+    if resume:
         replayer_args.append("--resume")
 
     demo_procs["replayer"] = subprocess.Popen(
@@ -159,8 +206,8 @@ def start_demo(resume: bool = False):
 
 @app.post("/api/demo/stop")
 def stop_demo():
-    for key in list(demo_procs):
-        _kill_proc(demo_procs[key])
+    for key in ["replayer", "stream"]:
+        _kill_proc(demo_procs.get(key))
         demo_procs[key] = None
     return {"status": "stopped"}
 
@@ -168,3 +215,4 @@ def stop_demo():
 @app.on_event("shutdown")
 def _shutdown():
     stop_demo()
+    _kill_proc(demo_procs.get("mapreduce"))
