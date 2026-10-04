@@ -1,172 +1,237 @@
 #!/usr/bin/env bash
-# One-command launcher: dataset + Docker stack + API + UI + live replay logs.
-set -euo pipefail
+set -Eeuo pipefail
 
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
+
 LOG_DIR="$ROOT/logs"
 PID_DIR="$ROOT/.run"
-mkdir -p "$LOG_DIR" "$PID_DIR" "$ROOT/data/raw"
 
-MONGO_URI="${MONGO_URI:-mongodb://localhost:27018/log_analytics}"
-API_PORT="${API_PORT:-8000}"
-UI_PORT="${UI_PORT:-3000}"
+mkdir -p "$LOG_DIR" "$PID_DIR"
 
-log() { printf '%s %s\n' "[start]" "$*"; }
-fail() { printf '%s %s\n' "[start] ERROR:" "$*" >&2; exit 1; }
-need() { command -v "$1" >/dev/null 2>&1 || fail "missing dependency: $1"; }
+DEFAULT_API_PORT="${API_PORT:-8000}"
+DEFAULT_UI_PORT="${UI_PORT:-3000}"
 
-port_free() {
-  local port="$1"
-  python3 - "$port" <<'PY' >/dev/null 2>&1
-import socket, sys
-port = int(sys.argv[1])
-s = socket.socket()
-s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-try:
-    s.bind(("127.0.0.1", port))
-except OSError:
-    sys.exit(1)
-finally:
-    s.close()
-PY
+find_free_port() {
+    local port="$1"
+
+    while ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE ":${port}$"; do
+        port=$((port + 1))
+    done
+
+    echo "$port"
 }
 
-first_free_port() {
-  local port="$1"
-  while ! port_free "$port"; do
-    log "port $port is occupied; trying $((port + 1))" >&2
-    port=$((port + 1))
-  done
-  printf '%s' "$port"
-}
+kill_pid_file() {
+    local name="$1"
+    local file="$PID_DIR/$name.pid"
 
-stop_pid() {
-  local name="$1"
-  local pidfile="$PID_DIR/${name}.pid"
-  if [[ -f "$pidfile" ]]; then
-    local pid
-    pid="$(cat "$pidfile" || true)"
-    if [[ -n "${pid:-}" ]] && kill -0 "$pid" 2>/dev/null; then
-      kill "$pid" 2>/dev/null || true
-      sleep 0.5
-      kill -9 "$pid" 2>/dev/null || true
+    if [[ -f "$file" ]]; then
+        local pid
+        pid="$(cat "$file" 2>/dev/null || true)"
+
+        if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+            echo "Stopping $name (PID $pid)..."
+            kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+
+            for _ in {1..20}; do
+                kill -0 "$pid" 2>/dev/null || break
+                sleep 0.25
+            done
+
+            kill -9 -- "-$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
+        fi
+
+        rm -f "$file"
     fi
-    rm -f "$pidfile"
-  fi
 }
 
 cleanup() {
-  log "stopping local demo/API/UI processes"
-  curl -sf -X POST "http://127.0.0.1:${API_PORT}/api/demo/stop" >/dev/null 2>&1 || true
-  stop_pid api
-  stop_pid ui
-  [[ -n "${TAIL_PID:-}" ]] && kill "$TAIL_PID" 2>/dev/null || true
+    trap - INT TERM EXIT
+
+    echo
+    echo "Stopping Log Analyzer..."
+
+    # Stop demo workers through the API first.
+    if [[ -n "${API_URL:-}" ]]; then
+        curl -sf -X POST "$API_URL/api/demo/stop" >/dev/null 2>&1 || true
+    fi
+
+    kill_pid_file "ui"
+    kill_pid_file "api"
+
+    echo "Local application stopped."
+
+    # Stop Docker services belonging to this application.
+    if command -v docker >/dev/null 2>&1; then
+        docker compose down >/dev/null 2>&1 || true
+        echo "Docker services stopped."
+    fi
+
+    echo "Everything stopped."
 }
-trap cleanup INT TERM
 
-need docker
-need python3
-need curl
-if ! docker compose version >/dev/null 2>&1; then
-  fail "docker compose is required"
-fi
+trap cleanup INT TERM EXIT
 
-chmod +x "$ROOT/scripts/download_clarknet.sh" "$ROOT/scripts/run_pipeline.sh" "$ROOT/scripts/verify.sh" || true
-log "ensuring ClarkNet dataset"
-bash "$ROOT/scripts/download_clarknet.sh"
+echo
+echo "=========================================="
+echo "       CLARKNET BIG DATA ANALYTICS"
+echo "=========================================="
+echo
 
-if [[ ! -d "$ROOT/.venv" ]]; then
-  log "creating Python venv"
-  python3 -m venv "$ROOT/.venv"
-fi
-# shellcheck disable=SC1091
-source "$ROOT/.venv/bin/activate"
-log "installing Python deps"
-pip install -q -r "$ROOT/api/requirements.txt" -r "$ROOT/streaming/requirements.txt"
+# ------------------------------------------------------------
+# Docker
+# ------------------------------------------------------------
 
-export PATH="$ROOT/node-v20.11.1-linux-x64/bin:$PATH"
-if ! command -v node >/dev/null 2>&1; then
-  fail "node/npm required for the dashboard (install Node 18+)"
-fi
-if [[ ! -d "$ROOT/frontend/node_modules" ]]; then
-  log "installing frontend deps"
-  (cd "$ROOT/frontend" && npm install --silent)
-fi
+echo "[1/5] Starting infrastructure..."
+docker compose up -d
 
-log "starting Docker stack (HDFS, YARN, Hive, Spark, MongoDB)"
-docker compose up -d >/dev/null
-log "waiting for MongoDB on :27018"
-for i in $(seq 1 60); do
-  if python3 - <<'PY' >/dev/null 2>&1
-from pymongo import MongoClient
-MongoClient("mongodb://localhost:27018", serverSelectionTimeoutMS=1000).admin.command("ping")
-PY
-  then
-    log "MongoDB is up"
-    break
-  fi
-  [[ "$i" -eq 60 ]] && fail "MongoDB did not become ready. Check: docker compose logs mongo"
-  sleep 2
-done
+# ------------------------------------------------------------
+# Ports
+# ------------------------------------------------------------
 
-API_PORT="$(first_free_port "$API_PORT")"
-UI_PORT="$(first_free_port "$UI_PORT")"
-API_URL="http://localhost:${API_PORT}"
-UI_URL="http://localhost:${UI_PORT}"
+API_PORT="$(find_free_port "$DEFAULT_API_PORT")"
+UI_PORT="$(find_free_port "$DEFAULT_UI_PORT")"
 
-stop_pid api
-stop_pid ui
+API_URL="http://127.0.0.1:${API_PORT}"
+UI_URL="http://127.0.0.1:${UI_PORT}"
+
+echo
+echo "API      : $API_URL"
+echo "Frontend : $UI_URL"
+echo
+
+# ------------------------------------------------------------
+# Clear old logs
+# ------------------------------------------------------------
+
 : > "$LOG_DIR/api.log"
 : > "$LOG_DIR/frontend.log"
 : > "$LOG_DIR/replayer.log"
 : > "$LOG_DIR/stream.log"
 : > "$LOG_DIR/mapreduce.log"
 
-log "starting API on :${API_PORT}"
-MONGO_URI="$MONGO_URI" nohup python3 -m uvicorn api.main:app --host 0.0.0.0 --port "$API_PORT" --log-level info \
-  >"$LOG_DIR/api.log" 2>&1 &
-echo $! > "$PID_DIR/api.pid"
+# ------------------------------------------------------------
+# API
+# ------------------------------------------------------------
 
-log "starting dashboard on :${UI_PORT} with API proxy ${API_URL}"
-VITE_PORT="$UI_PORT" VITE_API_TARGET="$API_URL" nohup npm --prefix "$ROOT/frontend" run dev -- --host 0.0.0.0 --port "$UI_PORT" --strictPort --clearScreen false \
-  >"$LOG_DIR/frontend.log" 2>&1 &
-echo $! > "$PID_DIR/ui.pid"
+echo "[2/5] Starting API on port $API_PORT..."
 
-log "waiting for API and UI"
-api_ok=0
-ui_ok=0
-for _ in $(seq 1 60); do
-  curl -sf "$API_URL/api/health" >/dev/null 2>&1 && api_ok=1 || true
-  curl -sf "$UI_URL" >/dev/null 2>&1 && ui_ok=1 || true
-  [[ "$api_ok" -eq 1 && "$ui_ok" -eq 1 ]] && break
-  sleep 0.5
+setsid bash -c "
+    exec python3 -m uvicorn api.main:app \
+        --host 0.0.0.0 \
+        --port $API_PORT \
+        --log-level info
+" >"$LOG_DIR/api.log" 2>&1 &
+
+API_PID=$!
+echo "$API_PID" > "$PID_DIR/api.pid"
+
+# ------------------------------------------------------------
+# Frontend
+# ------------------------------------------------------------
+
+echo "[3/5] Starting frontend on port $UI_PORT..."
+echo "      API proxy → $API_URL"
+
+setsid bash -c "
+    export VITE_API_TARGET='$API_URL'
+    export VITE_PORT='$UI_PORT'
+
+    exec npm --prefix '$ROOT/frontend' run dev -- \
+        --host 0.0.0.0 \
+        --port '$UI_PORT' \
+        --strictPort \
+        --clearScreen false
+" >"$LOG_DIR/frontend.log" 2>&1 &
+
+UI_PID=$!
+echo "$UI_PID" > "$PID_DIR/ui.pid"
+
+# ------------------------------------------------------------
+# Wait for API
+# ------------------------------------------------------------
+
+echo "[4/5] Waiting for API..."
+
+for _ in {1..60}; do
+    if curl -sf "$API_URL/api/health" >/dev/null 2>&1; then
+        break
+    fi
+
+    if ! kill -0 "$API_PID" 2>/dev/null; then
+        echo
+        echo "ERROR: API crashed during startup."
+        cat "$LOG_DIR/api.log"
+        exit 1
+    fi
+
+    sleep 0.5
 done
-[[ "$api_ok" -eq 1 ]] || fail "API did not start. See logs/api.log"
-[[ "$ui_ok" -eq 1 ]] || fail "UI did not start. See logs/frontend.log"
 
-log "starting live ClarkNet replay"
-curl -sf -X POST "$API_URL/api/demo/start?resume=false" >/dev/null || log "demo start returned an error (see logs/api.log)"
+if ! curl -sf "$API_URL/api/health" >/dev/null 2>&1; then
+    echo "ERROR: API did not become ready."
+    cat "$LOG_DIR/api.log"
+    exit 1
+fi
 
-cat <<EOF
+# ------------------------------------------------------------
+# Wait for frontend
+# ------------------------------------------------------------
 
-  Log Analyzer is up.
+echo "[5/5] Waiting for frontend..."
 
-  Dashboard  $UI_URL
-  API docs   $API_URL/docs
-  MongoDB    localhost:27018
-  Hadoop UI  http://localhost:9870
-  YARN UI    http://localhost:8088
-  Spark UI   http://localhost:8080
+for _ in {1..60}; do
+    if curl -sf "$UI_URL" >/dev/null 2>&1; then
+        break
+    fi
 
-  This terminal is now following live logs.
-  Press Ctrl+C to stop the local API, UI, replayer, and stream worker.
-  Docker services remain up; run: docker compose down
+    if ! kill -0 "$UI_PID" 2>/dev/null; then
+        echo
+        echo "ERROR: Frontend crashed during startup."
+        cat "$LOG_DIR/frontend.log"
+        exit 1
+    fi
 
-EOF
+    sleep 0.5
+done
 
-sleep 1
-tail -n +1 -F "$LOG_DIR/api.log" "$LOG_DIR/frontend.log" "$LOG_DIR/replayer.log" "$LOG_DIR/stream.log" "$LOG_DIR/mapreduce.log" &
-TAIL_PID=$!
-wait "$TAIL_PID"
+if ! curl -sf "$UI_URL" >/dev/null 2>&1; then
+    echo "ERROR: Frontend did not become ready."
+    cat "$LOG_DIR/frontend.log"
+    exit 1
+fi
 
+echo
+echo "=========================================="
+echo "APPLICATION READY"
+echo "=========================================="
+echo
+echo "Dashboard:"
+echo "  $UI_URL"
+echo
+echo "API:"
+echo "  $API_URL"
+echo
+echo "Logs:"
+echo "  $LOG_DIR/api.log"
+echo "  $LOG_DIR/frontend.log"
+echo "  $LOG_DIR/replayer.log"
+echo "  $LOG_DIR/stream.log"
+echo
+echo "Press Ctrl+C to stop EVERYTHING."
+echo
+echo "=========================================="
+echo "LIVE LOGS"
+echo "=========================================="
+echo
+
+# ------------------------------------------------------------
+# Stay attached
+# ------------------------------------------------------------
+
+tail -F \
+    "$LOG_DIR/api.log" \
+    "$LOG_DIR/frontend.log" \
+    "$LOG_DIR/replayer.log" \
+    "$LOG_DIR/stream.log"
