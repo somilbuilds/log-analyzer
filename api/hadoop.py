@@ -82,13 +82,24 @@ def ensure_hdfs_dataset():
     if not os.path.exists(raw_file):
         return {"available": False, "uploaded": False, "message": "local ClarkNet access_log missing"}
 
+    # Check if dataset is already in HDFS to avoid expensive re-upload
+    check = _run_docker_exec("namenode", ["hdfs", "dfs", "-test", "-e", "/user/data/raw_logs/access_log"], timeout=5)
+    if check["status"] == "success":
+        return {
+            "available": True,
+            "uploaded": True,
+            "message": "Dataset present in HDFS",
+            "path": "/user/data/raw_logs/access_log",
+        }
+
+    # Upload if missing
     subprocess.run(["docker", "cp", raw_file, "namenode:/tmp/access_log"], check=False)
     res = _run_docker_exec("namenode", [
         "bash", "-lc",
         "hdfs dfs -mkdir -p /user/data/raw_logs && "
         "hdfs dfs -put -f /tmp/access_log /user/data/raw_logs/access_log && "
         "hdfs dfs -ls /user/data/raw_logs/access_log"
-    ])
+    ], timeout=90)
     return {
         "available": res["status"] == "success",
         "uploaded": res["status"] == "success",
