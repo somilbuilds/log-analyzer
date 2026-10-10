@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ── Resolve ROOT as a true Linux path, never a UNC path ────────
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 cd "$ROOT"
+
+# ── Ensure node/npm from the bundled installation ──────────────
+if [[ -d "$ROOT/node-v20.11.1-linux-x64/bin" ]]; then
+    export PATH="$ROOT/node-v20.11.1-linux-x64/bin:$PATH"
+fi
 
 LOG_DIR="$ROOT/logs"
 PID_DIR="$ROOT/.run"
@@ -76,6 +82,7 @@ trap cleanup INT TERM EXIT
 echo
 echo "=========================================="
 echo "       CLARKNET BIG DATA ANALYTICS"
+echo "          LABORATORY"
 echo "=========================================="
 echo
 
@@ -112,12 +119,26 @@ echo
 : > "$LOG_DIR/mapreduce.log"
 
 # ------------------------------------------------------------
+# Virtualenv
+# ------------------------------------------------------------
+
+VENV="$ROOT/.venv"
+if [[ -d "$VENV" && -f "$VENV/bin/activate" ]]; then
+    # shellcheck disable=SC1091
+    source "$VENV/bin/activate"
+fi
+
+# ------------------------------------------------------------
 # API
 # ------------------------------------------------------------
 
 echo "[2/5] Starting API on port $API_PORT..."
 
 setsid bash -c "
+    cd '$ROOT'
+    if [[ -f '$ROOT/.venv/bin/activate' ]]; then
+        source '$ROOT/.venv/bin/activate'
+    fi
     exec python3 -m uvicorn api.main:app \
         --host 0.0.0.0 \
         --port $API_PORT \
@@ -128,17 +149,28 @@ API_PID=$!
 echo "$API_PID" > "$PID_DIR/api.pid"
 
 # ------------------------------------------------------------
-# Frontend
+# Frontend  (stay in linux-native paths; never use UNC)
 # ------------------------------------------------------------
 
 echo "[3/5] Starting frontend on port $UI_PORT..."
 echo "      API proxy → $API_URL"
 
+FRONTEND_DIR="$ROOT/frontend"
+VITE_BIN="$FRONTEND_DIR/node_modules/.bin/vite"
+
+# Ensure node_modules exist
+if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
+    echo "      Installing frontend dependencies..."
+    (cd "$FRONTEND_DIR" && npm install --prefer-offline --no-audit --no-fund 2>&1 | tail -5)
+fi
+
+# Use the vite binary directly (avoids npm wrapper which can re-invoke cmd.exe on WSL)
 setsid bash -c "
+    cd '$FRONTEND_DIR'
     export VITE_API_TARGET='$API_URL'
     export VITE_PORT='$UI_PORT'
-
-    exec npm --prefix '$ROOT/frontend' run dev -- \
+    export PATH='$ROOT/node-v20.11.1-linux-x64/bin:\$PATH'
+    exec '$VITE_BIN' \
         --host 0.0.0.0 \
         --port '$UI_PORT' \
         --strictPort \
@@ -212,6 +244,7 @@ echo "  $UI_URL"
 echo
 echo "API:"
 echo "  $API_URL"
+echo "  $API_URL/docs"
 echo
 echo "Logs:"
 echo "  $LOG_DIR/api.log"
