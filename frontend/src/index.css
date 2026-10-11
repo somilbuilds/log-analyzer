@@ -1045,3 +1045,143 @@ body {
 .error-low { background: rgba(34, 197, 94, 0.1); color: var(--color-success); }
 .error-mid { background: rgba(245, 158, 11, 0.1); color: var(--color-warning); }
 .error-high { background: rgba(239, 68, 68, 0.1); color: var(--color-danger); }
+
+/* ── HDFS Database Cylinders Architecture ───────────────────────── */
+.hdfs-cluster-canvas {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  overflow-y: auto;
+  height: 100%;
+  padding: var(--sp-1);
+}
+
+.hdfs-master-rack {
+  display: flex;
+  justify-content: center;
+  margin-bottom: var(--sp-2);
+}
+
+.hdfs-datanodes-rack {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--sp-3);
+}
+
+.db-cylinder-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius);
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  position: relative;
+  transition: all var(--transition-base);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.db-cylinder-card:hover {
+  border-color: var(--accent-cyan);
+  background: var(--bg-panel-hover);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(34, 211, 238, 0.1);
+}
+
+.db-cylinder-card.master {
+  max-width: 580px;
+  width: 100%;
+  border-color: rgba(45, 212, 191, 0.4);
+  background: linear-gradient(180deg, rgba(45, 212, 191, 0.05) 0%, var(--bg-panel) 100%);
+}
+
+.db-cylinder-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  border-bottom: 1px solid var(--border-default);
+  padding-bottom: var(--sp-2);
+}
+
+.db-cylinder-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-weight: 600;
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+
+.db-cylinder-visual-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-2) 0;
+}
+
+/* 3D Database Cylinder Platter representation */
+.db-cylinder-3d {
+  width: 90px;
+  height: 70px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.4));
+}
+
+.db-platter {
+  width: 80px;
+  height: 18px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #2a2d3d 0%, #171822 100%);
+  border: 1px solid #3b3d54;
+  position: absolute;
+  box-shadow: inset 0 2px 4px rgba(255, 255, 255, 0.1), 0 3px 6px rgba(0, 0, 0, 0.5);
+  transition: all var(--transition-fast);
+}
+
+.db-platter.platter-1 { top: 0px; z-index: 3; background: linear-gradient(180deg, #363a4e 0%, #1f212d 100%); }
+.db-platter.platter-2 { top: 20px; z-index: 2; }
+.db-platter.platter-3 { top: 40px; z-index: 1; }
+
+.db-cylinder-card.master .db-platter.platter-1 {
+  border-color: var(--accent-teal);
+  box-shadow: inset 0 2px 6px rgba(45, 212, 191, 0.3), 0 3px 6px rgba(0, 0, 0, 0.5);
+}
+
+.db-cylinder-card:not(.master) .db-platter.platter-1 {
+  border-color: var(--accent-blue);
+  box-shadow: inset 0 2px 6px rgba(59, 130, 246, 0.3), 0 3px 6px rgba(0, 0, 0, 0.5);
+}
+
+.db-cylinder-activity {
+  position: absolute;
+  top: 6px;
+  right: 14px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-success);
+  box-shadow: 0 0 6px var(--color-success);
+  z-index: 4;
+}
+
+.db-block-badge {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px var(--sp-2);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.db-block-badge:hover {
+  border-color: var(--accent-cyan);
+}
+

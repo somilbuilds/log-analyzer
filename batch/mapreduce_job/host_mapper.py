@@ -6,4 +6,4 @@ for line in sys.stdin:
         continue
     host = line.split()[0]
     if host:
-        print(f"{host}\t1")
+        print("{}\t1".format(host))

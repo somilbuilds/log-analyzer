@@ -90,8 +90,47 @@ echo
 # Docker
 # ------------------------------------------------------------
 
-echo "[1/5] Starting infrastructure..."
+echo "[1/6] Starting infrastructure..."
 docker compose up -d
+
+# ------------------------------------------------------------
+# HDFS Dataset – persist once, skip on subsequent starts
+# ------------------------------------------------------------
+
+echo "[2/6] Ensuring dataset is in HDFS..."
+
+RAW_LOG="$ROOT/data/raw/access_log"
+HDFS_PATH="/user/data/raw_logs/access_log"
+
+# Wait for namenode to accept HDFS commands (up to 90s)
+HDFS_READY=false
+for i in $(seq 1 90); do
+    if docker exec namenode hdfs dfs -ls / >/dev/null 2>&1; then
+        HDFS_READY=true
+        break
+    fi
+    sleep 1
+done
+
+if ! $HDFS_READY; then
+    echo "WARNING: HDFS not ready after 90s – dataset upload skipped."
+else
+    # Check whether dataset already exists in HDFS (from a previous run)
+    if docker exec namenode hdfs dfs -test -e "$HDFS_PATH" 2>/dev/null; then
+        echo "  ✓ Dataset already present in HDFS (persisted from previous run)."
+    elif [[ -f "$RAW_LOG" ]]; then
+        echo "  Uploading dataset to HDFS (first-time setup)..."
+        docker cp "$RAW_LOG" namenode:/tmp/access_log
+        docker exec namenode bash -c "
+            hdfs dfs -mkdir -p /user/data/raw_logs /user/data/results && \
+            hdfs dfs -put -f /tmp/access_log $HDFS_PATH && \
+            rm -f /tmp/access_log
+        "
+        echo "  ✓ Dataset uploaded to HDFS at $HDFS_PATH"
+    else
+        echo "  WARNING: Local dataset not found at $RAW_LOG – HDFS upload skipped."
+    fi
+fi
 
 # ------------------------------------------------------------
 # Ports
@@ -132,7 +171,7 @@ fi
 # API
 # ------------------------------------------------------------
 
-echo "[2/5] Starting API on port $API_PORT..."
+echo "[3/6] Starting API on port $API_PORT..."
 
 setsid bash -c "
     cd '$ROOT'
@@ -152,7 +191,7 @@ echo "$API_PID" > "$PID_DIR/api.pid"
 # Frontend  (stay in linux-native paths; never use UNC)
 # ------------------------------------------------------------
 
-echo "[3/5] Starting frontend on port $UI_PORT..."
+echo "[4/6] Starting frontend on port $UI_PORT..."
 echo "      API proxy → $API_URL"
 
 FRONTEND_DIR="$ROOT/frontend"
@@ -184,7 +223,7 @@ echo "$UI_PID" > "$PID_DIR/ui.pid"
 # Wait for API
 # ------------------------------------------------------------
 
-echo "[4/5] Waiting for API..."
+echo "[5/6] Waiting for API..."
 
 for _ in {1..60}; do
     if curl -sf "$API_URL/api/health" >/dev/null 2>&1; then
@@ -211,7 +250,7 @@ fi
 # Wait for frontend
 # ------------------------------------------------------------
 
-echo "[5/5] Waiting for frontend..."
+echo "[6/6] Waiting for frontend..."
 
 for _ in {1..60}; do
     if curl -sf "$UI_URL" >/dev/null 2>&1; then

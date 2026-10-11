@@ -44,13 +44,13 @@ def reducer():
         else:
             # Emit previous key's total
             if current_key is not None:
-                print(f"{current_key}\t{current_count}")
+                print("%s\t%s" % (current_key, current_count))
             current_key = key
             current_count = count
 
     # Don't forget the last key
     if current_key is not None:
-        print(f"{current_key}\t{current_count}")
+        print("%s\t%s" % (current_key, current_count))
 
 
 if __name__ == "__main__":

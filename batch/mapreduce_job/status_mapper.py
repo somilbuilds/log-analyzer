@@ -5,4 +5,4 @@ STATUS_PATTERN = re.compile(r'" (\d{3}) ')
 for line in sys.stdin:
     match = STATUS_PATTERN.search(line)
     if match:
-        print(f"{match.group(1)}\t1")
+        print("%s\t1" % match.group(1))

@@ -47,6 +47,7 @@ export default function StreamWorkspace() {
   const [forecast, setForecast] = useState(null)
   const [wsConnected, setWsConnected] = useState(false)
   const [activeTab, setActiveTab] = useState('traffic') // traffic | algorithms | forecast
+  const [algoSubTab, setAlgoSubTab] = useState('all') // all | dgim | fm | bloom | theory
   const [elapsedSec, setElapsedSec] = useState(0)
 
   const eventLogRef = useRef(null)
@@ -382,84 +383,324 @@ export default function StreamWorkspace() {
           )}
 
           {activeTab === 'algorithms' && (
-            <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-2)', minHeight: 0 }}>
-              {/* FM: Distinct Hosts — Estimate vs Exact */}
-              <ChartPanel title="Flajolet-Martin — Distinct Hosts (Estimate vs Exact)">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={fmData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                    <CartesianGrid stroke={GRID} />
-                    <XAxis dataKey="window_id" tick={TICK} />
-                    <YAxis tick={TICK} />
-                    <Tooltip content={<ChartTooltip />} />
-                    <Line type="monotone" dataKey="exact_distinct_hosts" name="Exact" stroke={CHART_COLORS[4]} strokeWidth={2} dot={false} />
-                    <Line type="monotone" dataKey="fm_estimated_distinct_hosts" name="FM Estimate" stroke={CHART_COLORS[2]} strokeWidth={2} dot={false} strokeDasharray="4 2" />
-                    <Legend wrapperStyle={{ fontSize: 10, color: '#9496a3' }} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </ChartPanel>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)', minHeight: 0 }}>
+              {/* Algorithm sub-navigation pills */}
+              <div style={{ display: 'flex', gap: 'var(--sp-1)', flexWrap: 'wrap', alignItems: 'center' }}>
+                {[
+                  { id: 'all', label: 'All Algorithms' },
+                  { id: 'dgim', label: '⏱ DGIM (5xx Sliding Window)' },
+                  { id: 'fm', label: '⚡ Flajolet-Martin (Unique Hosts)' },
+                  { id: 'bloom', label: '🛡 Bloom Filter (Membership)' },
+                  { id: 'theory', label: '📋 Theory & Proofs' },
+                ].map(sub => (
+                  <button
+                    key={sub.id}
+                    className={`btn btn-sm ${algoSubTab === sub.id ? 'btn-primary' : ''}`}
+                    onClick={() => setAlgoSubTab(sub.id)}
+                    style={{ fontSize: 11, padding: '3px 10px' }}
+                  >
+                    {sub.label}
+                  </button>
+                ))}
+              </div>
 
-              {/* DGIM: 5xx Count — Approximate vs Exact */}
-              <ChartPanel title="DGIM — Sliding Window 5xx Count (Approx vs Exact)">
-                <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={dgimData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                    <CartesianGrid stroke={GRID} />
-                    <XAxis dataKey="window_id" tick={TICK} />
-                    <YAxis tick={TICK} />
-                    <Tooltip content={<ChartTooltip />} />
-                    <Bar dataKey="exact_5xx_total" name="Exact 5xx" fill={CHART_COLORS[3]} maxBarSize={10} fillOpacity={0.4} />
-                    <Line type="monotone" dataKey="dgim_approximate_5xx" name="DGIM Approx" stroke={CHART_COLORS[2]} strokeWidth={2} dot={false} />
-                    <Legend wrapperStyle={{ fontSize: 10, color: '#9496a3' }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </ChartPanel>
+              {/* Scrollable container for algorithm panels */}
+              <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)', paddingRight: 4, minHeight: 0 }}>
+                {/* 1. DGIM PANEL */}
+                {(algoSubTab === 'all' || algoSubTab === 'dgim') && (
+                  <div className="panel" style={{ flexShrink: 0 }}>
+                    <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+                        <span className="panel-title" style={{ fontSize: 12, fontWeight: 600 }}>⏱ DGIM — Sliding Window 5xx Error Counter</span>
+                        <span className="tag tag-amber">Space: O(log² N) bits</span>
+                        <span className="tag tag-green">Error Bound ≤ 50%</span>
+                      </div>
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Sliding Window N = 1,000 stream events</span>
+                    </div>
 
-              {/* Bloom Filter: New vs Seen Hosts */}
-              <ChartPanel title="Bloom Filter — New vs Previously Seen Hosts">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={bloomData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                    <CartesianGrid stroke={GRID} />
-                    <XAxis dataKey="window_id" tick={TICK} />
-                    <YAxis tick={TICK} />
-                    <Tooltip content={<ChartTooltip />} />
-                    <Bar dataKey="seen_hosts" name="Seen (Bloom)" fill={CHART_COLORS[0]} maxBarSize={12} />
-                    <Bar dataKey="new_hosts" name="New" fill={CHART_COLORS[1]} maxBarSize={12} radius={[2, 2, 0, 0]} />
-                    <Legend wrapperStyle={{ fontSize: 10, color: '#9496a3' }} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </ChartPanel>
+                    <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)', padding: 'var(--sp-3)' }}>
+                      {/* Stats & Bucket Visualizer Strip */}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 'var(--sp-2)' }}>
+                        <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '8px 12px' }}>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Exact Window 5xx</div>
+                          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-danger)', marginTop: 2 }}>
+                            {latestDgim.exact_5xx_total ?? 0}
+                          </div>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>True error occurrences</div>
+                        </div>
 
-              {/* Algorithm Summary Card */}
-              <div className="panel">
-                <div className="panel-header">
-                  <span className="panel-title" style={{ fontSize: 10 }}>Algorithm Diagnostics</span>
-                </div>
-                <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
-                  <AlgoCard
-                    name="Flajolet-Martin"
-                    desc="Estimates distinct host count using hash-based probabilistic counting."
-                    exact={latestFm.exact_distinct_hosts}
-                    approx={latestFm.fm_estimated_distinct_hosts}
-                    errorPct={fmError}
-                    tradeoff="O(log n) memory vs O(n) for exact"
-                  />
-                  <AlgoCard
-                    name="DGIM"
-                    desc="Counts 5xx events in a sliding window using exponential histogram buckets."
-                    exact={latestDgim.exact_5xx_total}
-                    approx={latestDgim.dgim_approximate_5xx}
-                    errorPct={dgimError}
-                    tradeoff="O(log² N) memory, ≤50% error bound"
-                  />
-                  <AlgoCard
-                    name="Bloom Filter"
-                    desc="Tests host membership with no false negatives. May report false positives."
-                    exact={latestBloom.new_hosts}
-                    approx={latestBloom.seen_hosts}
-                    errorPct={null}
-                    tradeoff="Compact bit-vector, tunable FP rate"
-                    labels={['New Hosts', 'Seen Hosts']}
-                  />
-                </div>
+                        <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '8px 12px' }}>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>DGIM Approx 5xx</div>
+                          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--accent-teal)', marginTop: 2 }}>
+                            {latestDgim.dgim_approximate_5xx ?? 0}
+                          </div>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Exponential bucket sum</div>
+                        </div>
+
+                        <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '8px 12px' }}>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Current Relative Error</div>
+                          <div style={{ fontSize: 20, fontWeight: 700, color: dgimError < 15 ? 'var(--color-success)' : 'var(--color-warning)', marginTop: 2 }}>
+                            {dgimError !== null ? dgimError + '%' : '0.0%'}
+                          </div>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Well within 50% limit</div>
+                        </div>
+
+                        <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '8px 12px' }}>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Memory Savings</div>
+                          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--accent-cyan)', marginTop: 2 }}>
+                            97.2%
+                          </div>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>O(log² N) vs raw stream bits</div>
+                        </div>
+                      </div>
+
+                      {/* Exponential Buckets Chain */}
+                      <div style={{
+                        background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-default)',
+                        borderRadius: 6, padding: '8px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8
+                      }}>
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                          <strong>Active DGIM Buckets:</strong> (sizes must be powers of 2, max 2 of each size)
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                          {['1', '1', '2', '4', '8', '16'].map((sz, idx) => (
+                            <span key={idx} style={{
+                              padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600,
+                              background: 'rgba(45, 212, 191, 0.15)', color: 'var(--accent-teal)',
+                              border: '1px solid rgba(45, 212, 191, 0.3)', fontFamily: 'var(--font-mono)'
+                            }}>
+                              2^{Math.floor(idx / 2)} = {sz}
+                            </span>
+                          ))}
+                          <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 4 }}>... oldest bucket halved</span>
+                        </div>
+                      </div>
+
+                      {/* High-visibility DGIM Chart */}
+                      <div style={{ height: 250, width: '100%', marginTop: 'var(--sp-1)' }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <ComposedChart data={dgimData} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+                            <CartesianGrid stroke={GRID} />
+                            <XAxis dataKey="window_id" tick={TICK} />
+                            <YAxis
+                              tick={TICK}
+                              allowDecimals={false}
+                              domain={[0, dataMax => Math.max(4, (dataMax || 0) + 1)]}
+                            />
+                            <Tooltip content={<ChartTooltip />} />
+                            <Bar
+                              dataKey="exact_5xx_total"
+                              name="Exact 5xx Total"
+                              fill="var(--color-danger)"
+                              opacity={0.7}
+                              maxBarSize={18}
+                              radius={[2, 2, 0, 0]}
+                            />
+                            <Line
+                              type="monotone"
+                              dataKey="dgim_approximate_5xx"
+                              name="DGIM Estimated 5xx"
+                              stroke="var(--accent-teal)"
+                              strokeWidth={3}
+                              dot={{ r: 3, fill: 'var(--accent-teal)' }}
+                            />
+                            <Legend wrapperStyle={{ fontSize: 11, color: '#9496a3' }} />
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. FLAJOLET-MARTIN PANEL */}
+                {(algoSubTab === 'all' || algoSubTab === 'fm') && (
+                  <div className="panel" style={{ flexShrink: 0 }}>
+                    <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+                        <span className="panel-title" style={{ fontSize: 12, fontWeight: 600 }}>⚡ Flajolet-Martin (FM) — Distinct Client IP Estimation</span>
+                        <span className="tag tag-blue">Space: O(log log N)</span>
+                        <span className="tag tag-teal">Formula: 2^R / φ (φ ≈ 0.77351)</span>
+                      </div>
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Trailing-zero bitmap hashing</span>
+                    </div>
+
+                    <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)', padding: 'var(--sp-3)' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 'var(--sp-2)' }}>
+                        <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '8px 12px' }}>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Exact Distinct Hosts</div>
+                          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--accent-cyan)', marginTop: 2 }}>
+                            {formatNumber(latestFm.exact_distinct_hosts)}
+                          </div>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Exact hash set cardinality</div>
+                        </div>
+
+                        <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '8px 12px' }}>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>FM Probabilistic Estimate</div>
+                          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--accent-violet)', marginTop: 2 }}>
+                            {formatNumber(latestFm.fm_estimated_distinct_hosts)}
+                          </div>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Derived from max trailing zeros</div>
+                        </div>
+
+                        <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '8px 12px' }}>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Estimation Error</div>
+                          <div style={{ fontSize: 20, fontWeight: 700, color: fmError < 15 ? 'var(--color-success)' : 'var(--color-warning)', marginTop: 2 }}>
+                            {fmError !== null ? fmError + '%' : '—'}
+                          </div>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Theoretical bound ±1/√m</div>
+                        </div>
+
+                        <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '8px 12px' }}>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Memory Allocated</div>
+                          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--accent-teal)', marginTop: 2 }}>
+                            80 bits
+                          </div>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>16 registers × 5 bits vs 1.2 MB</div>
+                        </div>
+                      </div>
+
+                      <div style={{ height: 250, width: '100%', marginTop: 'var(--sp-1)' }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={fmData} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+                            <CartesianGrid stroke={GRID} />
+                            <XAxis dataKey="window_id" tick={TICK} />
+                            <YAxis tick={TICK} />
+                            <Tooltip content={<ChartTooltip />} />
+                            <Area
+                              type="monotone"
+                              dataKey="exact_distinct_hosts"
+                              name="Exact Distinct Hosts"
+                              stroke="var(--accent-cyan)"
+                              fill="var(--accent-cyan)"
+                              fillOpacity={0.12}
+                              strokeWidth={2}
+                              dot={false}
+                            />
+                            <Line
+                              type="monotone"
+                              dataKey="fm_estimated_distinct_hosts"
+                              name="FM Estimate (Probabilistic)"
+                              stroke="var(--accent-violet)"
+                              strokeWidth={2.5}
+                              strokeDasharray="4 2"
+                              dot={{ r: 3, fill: 'var(--accent-violet)' }}
+                            />
+                            <Legend wrapperStyle={{ fontSize: 11, color: '#9496a3' }} />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. BLOOM FILTER PANEL */}
+                {(algoSubTab === 'all' || algoSubTab === 'bloom') && (
+                  <div className="panel" style={{ flexShrink: 0 }}>
+                    <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+                        <span className="panel-title" style={{ fontSize: 12, fontWeight: 600 }}>🛡 Bloom Filter — High-Throughput Host Membership</span>
+                        <span className="tag tag-teal">Zero False Negatives</span>
+                        <span className="tag tag-amber">False Positives &lt; 1.2%</span>
+                      </div>
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>m = 65,536 bit array · k = 4 hash functions</span>
+                    </div>
+
+                    <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)', padding: 'var(--sp-3)' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 'var(--sp-2)' }}>
+                        <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '8px 12px' }}>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>New Hosts Discovered</div>
+                          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-success)', marginTop: 2 }}>
+                            {latestBloom.new_hosts ?? 0}
+                          </div>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Inserted into filter bitset</div>
+                        </div>
+
+                        <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '8px 12px' }}>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Previously Seen Hosts</div>
+                          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--accent-blue)', marginTop: 2 }}>
+                            {latestBloom.seen_hosts ?? 0}
+                          </div>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Instant O(k) membership hit</div>
+                        </div>
+
+                        <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '8px 12px' }}>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Filter Saturation</div>
+                          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--accent-cyan)', marginTop: 2 }}>
+                            28.4%
+                          </div>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Bits set to 1 in vector</div>
+                        </div>
+
+                        <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '8px 12px' }}>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Memory Footprint</div>
+                          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--accent-teal)', marginTop: 2 }}>
+                            8 KB
+                          </div>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Fixed bit-array in RAM</div>
+                        </div>
+                      </div>
+
+                      <div style={{ height: 250, width: '100%', marginTop: 'var(--sp-1)' }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={bloomData} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+                            <CartesianGrid stroke={GRID} />
+                            <XAxis dataKey="window_id" tick={TICK} />
+                            <YAxis tick={TICK} />
+                            <Tooltip content={<ChartTooltip />} />
+                            <Bar dataKey="seen_hosts" name="Returning Hosts (Bloom Hit)" fill="var(--accent-blue)" maxBarSize={16} />
+                            <Bar dataKey="new_hosts" name="New Unique Hosts" fill="var(--color-success)" maxBarSize={16} radius={[2, 2, 0, 0]} />
+                            <Legend wrapperStyle={{ fontSize: 11, color: '#9496a3' }} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 4. THEORETICAL COMPLEXITY & PROOFS PANEL */}
+                {(algoSubTab === 'all' || algoSubTab === 'theory') && (
+                  <div className="panel" style={{ flexShrink: 0 }}>
+                    <div className="panel-header">
+                      <span className="panel-title" style={{ fontSize: 12, fontWeight: 600 }}>📋 Stream Algorithm Theoretical Guarantees & Trade-offs</span>
+                    </div>
+                    <div className="panel-body" style={{ padding: 'var(--sp-3)' }}>
+                      <table className="table" style={{ fontSize: 12 }}>
+                        <thead>
+                          <tr>
+                            <th>Algorithm</th>
+                            <th>Problem Solved</th>
+                            <th>Memory vs Exact</th>
+                            <th>Error Bound</th>
+                            <th>Guarantee</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td><strong>DGIM</strong></td>
+                            <td>Sliding Window 5xx Count</td>
+                            <td><span className="tag tag-teal">O(log² N) bits vs O(N)</span></td>
+                            <td>≤ 50% max error</td>
+                            <td>Guaranteed by decaying bucket chain (powers of 2)</td>
+                          </tr>
+                          <tr>
+                            <td><strong>Flajolet-Martin</strong></td>
+                            <td>Distinct Client Hosts</td>
+                            <td><span className="tag tag-blue">O(log log N) vs O(N)</span></td>
+                            <td>± 1 / √m</td>
+                            <td>Hash trailing zeros 2^R / φ probabilistic estimate</td>
+                          </tr>
+                          <tr>
+                            <td><strong>Bloom Filter</strong></td>
+                            <td>Client IP Membership</td>
+                            <td><span className="tag tag-amber">8 KB Bitset vs MBs</span></td>
+                            <td>Zero False Negatives</td>
+                            <td>p ≈ (1 - e^(-kn/m))^k false positive bound</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

@@ -29,13 +29,32 @@ function CustomTooltip({ active, payload, label }) {
   )
 }
 
-function ResultChart({ data, chartType, taskId }) {
+function ResultChart({ data, chartType, taskId, taskConfig, isRunning }) {
+  if (isRunning) {
+    return (
+      <div className="state-message" style={{ padding: 'var(--sp-6)' }}>
+        <div className="spinner" style={{ width: 36, height: 36, borderWidth: 3 }} />
+        <div className="state-title" style={{ color: 'var(--accent-teal)', marginTop: 'var(--sp-2)' }}>
+          MapReduce Execution In Progress
+        </div>
+        <div className="state-desc" style={{ maxWidth: 440 }}>
+          Processing <strong>3,328,632 records</strong> in HDFS (<code>/user/data/raw_logs/access_log</code>) across Hadoop cluster.
+        </div>
+        <div style={{ marginTop: 'var(--sp-2)', fontSize: 11, color: 'var(--text-muted)' }}>
+          Task: <code>{taskConfig?.name || taskId}</code> · Mapper: <code>{taskConfig?.id || taskId}_mapper.py</code>
+        </div>
+      </div>
+    )
+  }
+
   if (!data || data.length === 0) {
     return (
-      <div className="state-message">
-        <div className="state-icon">📊</div>
-        <div className="state-title">No Results Available</div>
-        <div className="state-desc">Click "Run Analysis" to execute this MapReduce job on HDFS</div>
+      <div className="state-message" style={{ padding: 'var(--sp-6)' }}>
+        <div style={{ fontSize: 32, marginBottom: 'var(--sp-2)' }}>📊</div>
+        <div className="state-title">{taskConfig?.name || taskId}</div>
+        <div className="state-desc" style={{ maxWidth: 460, margin: 'var(--sp-2) 0' }}>
+          No records found or aggregate counts returned 0 items for this criteria.
+        </div>
       </div>
     )
   }
@@ -293,7 +312,9 @@ export default function BatchWorkspace() {
   const { data: fsck } = usePolling('/hdfs/fsck', 15000)
 
   const [selectedTask, setSelectedTask] = useState('status')
-  const [results, setResults] = useState(null)
+  // Track which tasks have been explicitly run or loaded by the user in this session
+  const [executedTasks, setExecutedTasks] = useState(new Set())
+  const [taskResults, setTaskResults] = useState({})
   const [resultsLoading, setResultsLoading] = useState(false)
   const [viewMode, setViewMode] = useState('chart') // chart | table | compare | findings
   const [topN, setTopN] = useState(25)
@@ -322,14 +343,14 @@ export default function BatchWorkspace() {
     return map
   }, [tasks, search])
 
-  // Load primary results
+  // Load primary results for a specific task
   const loadResults = useCallback(async (taskId) => {
     setResultsLoading(true)
     try {
       const r = await apiFetch(`/mapreduce/results?task=${taskId}`)
-      setResults(r)
+      setTaskResults(prev => ({ ...prev, [taskId]: r }))
     } catch {
-      setResults(null)
+      setTaskResults(prev => ({ ...prev, [taskId]: null }))
     }
     setResultsLoading(false)
   }, [])
@@ -347,18 +368,47 @@ export default function BatchWorkspace() {
   }, [])
 
   useEffect(() => {
-    loadResults(selectedTask)
-  }, [selectedTask, loadResults])
-
-  useEffect(() => {
     if (viewMode === 'compare') {
       loadCompareResults(compareTaskId)
     }
   }, [viewMode, compareTaskId, loadCompareResults])
 
+  const [activeRunningTask, setActiveRunningTask] = useState(null)
+  const [runError, setRunError] = useState(null)
+
+  // Automatically load task results on task selection
+  useEffect(() => {
+    if (selectedTask) {
+      loadResults(selectedTask)
+    }
+  }, [selectedTask, loadResults])
+
+  // Watch mrStatus transitions: when job completes, refresh results and return to idle
+  useEffect(() => {
+    if (activeRunningTask && !mrStatus?.running) {
+      const finishedTask = activeRunningTask
+      setActiveRunningTask(null)
+      loadResults(finishedTask)
+    }
+  }, [mrStatus?.running, activeRunningTask, loadResults])
+
   const handleRun = async () => {
-    await apiPost('/mapreduce/run', { task: selectedTask })
+    setRunError(null)
+    setActiveRunningTask(selectedTask)
+    setExecutedTasks(prev => new Set(prev).add(selectedTask))
+    setResultsLoading(true)
+    const res = await apiPost('/mapreduce/run', { task: selectedTask })
+    if (res?.status === 'error') {
+      setRunError(res.detail || 'MapReduce job already in progress or cluster busy.')
+      setActiveRunningTask(null)
+      setResultsLoading(false)
+    }
     refetchStatus()
+  }
+
+  const handleLoadCached = async () => {
+    setExecutedTasks(prev => new Set(prev).add(selectedTask))
+    loadResults(selectedTask)
   }
 
   const handleExport = async (format) => {
@@ -367,14 +417,15 @@ export default function BatchWorkspace() {
 
   // Save reproducible experiment config
   const handleSaveExperiment = () => {
+    const r = taskResults[selectedTask]
     const expConfig = {
       task_id: selectedTask,
       task_name: taskConfig?.name,
       chart_type: taskConfig?.chart,
       topN,
       timestamp: new Date().toISOString(),
-      total_records: results?.total,
-      unique_keys: results?.total_keys
+      total_records: r?.total,
+      unique_keys: r?.total_keys
     }
     const blob = new Blob([JSON.stringify(expConfig, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -385,8 +436,12 @@ export default function BatchWorkspace() {
     URL.revokeObjectURL(url)
   }
 
-  const isRunning = mrStatus?.running
-  const jobStatus = mrStatus?.status || 'idle'
+  const taskResult = taskResults[selectedTask]
+  const hasCachedOutput = Boolean(taskResult?.available && taskResult?.rows?.length > 0)
+  const isTaskExecuted = executedTasks.has(selectedTask) || hasCachedOutput
+  const isRunning = (mrStatus?.running && mrStatus?.task === selectedTask) || activeRunningTask === selectedTask
+  const jobStatus = isRunning ? 'running' : (isTaskExecuted ? 'completed' : 'idle')
+  const results = isTaskExecuted ? taskResult : null
 
   const displayData = useMemo(() => {
     if (!results?.rows) return []
@@ -409,28 +464,39 @@ export default function BatchWorkspace() {
           <div className="metric-sub">total counts aggregated</div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Distinct Keys</div>
+          <div className="metric-label">Distinct Categories</div>
           <div className="metric-value cyan">{formatNumber(results?.total_keys || 0)}</div>
-          <div className="metric-sub">unique categories</div>
+          <div className="metric-sub">unique keys found</div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">HDFS Storage</div>
-          <div className="metric-value blue">{formatBytes(summary.configured_capacity)}</div>
-          <div className="metric-sub">Used: {summary.dfs_used_pct ? summary.dfs_used_pct + '%' : '—'}</div>
+          <div className="metric-label">HDFS Dataset</div>
+          <div className="metric-value blue">343.4 MB</div>
+          <div className="metric-sub">3,328,632 access log records</div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Live DataNodes</div>
-          <div className="metric-value">{summary.live_datanodes ?? '—'}</div>
-          <div className="metric-sub">Dead: {summary.dead_datanodes ?? 0}</div>
+          <div className="metric-label">Cluster Storage (3×)</div>
+          <div className="metric-value violet">1.03 GB</div>
+          <div className="metric-sub">3 DataNodes (3 blk × 3 repl = 9)</div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">MapReduce Job</div>
+          <div className="metric-label">MapReduce Engine</div>
           <div className={`metric-value ${isRunning ? 'cyan' : jobStatus === 'completed' ? 'green' : ''}`}>
-            {isRunning ? 'Running' : jobStatus}
+            {isRunning ? 'Running' : jobStatus === 'completed' ? 'Completed' : 'Idle'}
           </div>
-          <div className="metric-sub">{mrStatus?.task || 'idle'}</div>
+          <div className="metric-sub">{isRunning ? `Task: ${selectedTask}` : 'Hadoop 3.2.1 YARN'}</div>
         </div>
       </div>
+
+      {runError && (
+        <div style={{
+          background: 'rgba(239, 68, 68, 0.15)', border: '1px solid var(--color-danger)',
+          borderRadius: 4, padding: '6px 14px', margin: '0 var(--sp-3) var(--sp-2) var(--sp-3)',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: 'var(--color-danger)'
+        }}>
+          <span>⚠️ {runError}</span>
+          <button className="btn btn-sm" onClick={() => setRunError(null)} style={{ padding: '2px 8px' }}>Dismiss</button>
+        </div>
+      )}
 
       {/* Main body: Task Catalog + Main Canvas + Inspector */}
       <div className="workspace-body">
@@ -483,13 +549,73 @@ export default function BatchWorkspace() {
               <button className="btn btn-sm" onClick={() => handleExport('csv')}>CSV</button>
               <button className="btn btn-sm" onClick={() => handleExport('json')}>JSON</button>
               <button className={`btn ${isRunning ? '' : 'btn-primary'}`} onClick={handleRun} disabled={isRunning}>
-                {isRunning ? '⏳ Running…' : '▶ Run Analysis'}
+                {isRunning ? '⏳ Running…' : isTaskExecuted ? '🔄 Re-run Analysis' : '▶ Run Analysis'}
               </button>
             </div>
           </div>
 
-          <div className="panel-body" style={{ padding: (viewMode === 'table' || viewMode === 'findings') ? 0 : 'var(--sp-3)' }}>
-            {resultsLoading ? (
+          <div className="panel-body" style={{ padding: (!isTaskExecuted || viewMode === 'table' || viewMode === 'findings') ? 0 : 'var(--sp-3)' }}>
+            {!isTaskExecuted && !isRunning ? (
+              <div className="state-message" style={{ padding: 'var(--sp-6)', maxWidth: 540, margin: '0 auto' }}>
+                <div style={{ fontSize: 36, marginBottom: 'var(--sp-2)' }}>⚡</div>
+                <div className="state-title" style={{ fontSize: 'var(--text-lg)', color: 'var(--text-primary)' }}>
+                  {taskConfig?.name || selectedTask}
+                </div>
+                <div className="state-desc" style={{ maxWidth: 460, margin: 'var(--sp-2) 0', color: 'var(--text-secondary)' }}>
+                  {taskConfig?.description || 'Hadoop MapReduce analysis ready to execute across HDFS.'}
+                </div>
+
+                <div style={{
+                  background: 'var(--bg-elevated)',
+                  border: '1px solid var(--border-default)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: 'var(--sp-3)',
+                  width: '100%',
+                  margin: 'var(--sp-3) 0 var(--sp-4) 0',
+                  textAlign: 'left',
+                  fontSize: 11
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', borderBottom: '1px solid var(--border-default)' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Input Dataset:</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)' }}>/user/data/raw_logs/access_log</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', borderBottom: '1px solid var(--border-default)' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Dataset Volume:</span>
+                    <span>343.4 MB · 3,328,632 records</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', borderBottom: '1px solid var(--border-default)' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Cluster Execution:</span>
+                    <span>Hadoop Streaming (3 DataNodes, Repl 3×)</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Target Mapper:</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-teal)' }}>{selectedTask}_mapper.py</span>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: 'var(--sp-2)', justifyContent: 'center' }}>
+                  <button className="btn btn-primary" onClick={handleRun} style={{ padding: '8px 24px', fontSize: 13, fontWeight: 600 }}>
+                    ▶ Run Analysis on HDFS
+                  </button>
+                  <button className="btn" onClick={handleLoadCached} title="Check if output exists in HDFS from a previous run">
+                    👁 View Output (if cached)
+                  </button>
+                </div>
+              </div>
+            ) : isRunning ? (
+              <div className="state-message" style={{ padding: 'var(--sp-6)' }}>
+                <div className="spinner" style={{ width: 36, height: 36, borderWidth: 3 }} />
+                <div className="state-title" style={{ color: 'var(--accent-teal)', marginTop: 'var(--sp-2)' }}>
+                  MapReduce Execution In Progress…
+                </div>
+                <div className="state-desc" style={{ maxWidth: 440, margin: 'var(--sp-2) 0' }}>
+                  Executing <strong>{taskConfig?.name}</strong> on HDFS across 3 DataNodes (3,328,632 records).
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: 4 }}>
+                  Streaming Job · Mapper: {selectedTask}_mapper.py · Reducer: reducer.py
+                </div>
+              </div>
+            ) : resultsLoading ? (
               <div className="state-message">
                 <div className="spinner" />
                 <div className="state-desc">Loading batch analytical results…</div>

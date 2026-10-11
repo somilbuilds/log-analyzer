@@ -38,7 +38,7 @@ def mapper():
         if match:
             status_code = match.group(1)
             # Emit key-value pair: status_code \t 1
-            print(f"{status_code}\t1")
+            print("{}\t1".format(status_code))
 
 
 if __name__ == "__main__":

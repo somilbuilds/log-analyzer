@@ -7,6 +7,11 @@ MapReduce 25-task catalog, job submission, and result parsing.
 import os
 import subprocess
 import re
+import time
+
+_HDFS_STATUS_CACHE = {"data": None, "ts": 0}
+_HDFS_REPORT_CACHE = {"data": None, "ts": 0}
+_HDFS_FSCK_CACHE = {"data": None, "ts": 0}
 
 # ── 25-Task Analytical Catalog ───────────────────────────────────
 
@@ -95,7 +100,7 @@ def ensure_hdfs_dataset():
     # Upload if missing
     subprocess.run(["docker", "cp", raw_file, "namenode:/tmp/access_log"], check=False)
     res = _run_docker_exec("namenode", [
-        "bash", "-lc",
+        "bash", "-c",
         "hdfs dfs -mkdir -p /user/data/raw_logs && "
         "hdfs dfs -put -f /tmp/access_log /user/data/raw_logs/access_log && "
         "hdfs dfs -ls /user/data/raw_logs/access_log"
@@ -110,7 +115,12 @@ def ensure_hdfs_dataset():
 
 # ── HDFS Status ──────────────────────────────────────────────────
 
-def get_hdfs_status(timeout=4):
+def get_hdfs_status(timeout=10):
+    global _HDFS_STATUS_CACHE
+    now = time.time()
+    if _HDFS_STATUS_CACHE["data"] and (now - _HDFS_STATUS_CACHE["ts"]) < 8:
+        return _HDFS_STATUS_CACHE["data"]
+
     res = _run_docker_exec("namenode", ["hdfs", "dfs", "-ls", "-R", "/user/data"], timeout=timeout)
     if res["status"] == "error":
         return {"available": False, "message": "HDFS unavailable", "files": [], "dataset_ready": False}
@@ -132,13 +142,21 @@ def get_hdfs_status(timeout=4):
                 "is_dir": parts[0].startswith("d"),
             })
     dataset_ready = any(f["path"] == "/user/data/raw_logs/access_log" for f in files)
-    return {"available": True, "files": files, "dataset_ready": dataset_ready}
+    result = {"available": True, "files": files, "dataset_ready": dataset_ready}
+    _HDFS_STATUS_CACHE["data"] = result
+    _HDFS_STATUS_CACHE["ts"] = now
+    return result
 
 
 # ── HDFS Diagnostics ─────────────────────────────────────────────
 
 def get_hdfs_report():
     """Get HDFS dfsadmin report — DataNode capacities, block counts, etc."""
+    global _HDFS_REPORT_CACHE
+    now = time.time()
+    if _HDFS_REPORT_CACHE["data"] and (now - _HDFS_REPORT_CACHE["ts"]) < 8:
+        return _HDFS_REPORT_CACHE["data"]
+
     res = _run_docker_exec("namenode", ["hdfs", "dfsadmin", "-report"])
     if res["status"] == "error":
         return {"available": False, "message": "HDFS report unavailable", "raw": ""}
@@ -182,16 +200,41 @@ def get_hdfs_report():
         if node:
             report["nodes"].append(node)
 
+    # Add friendly names to datanodes
+    for i, node in enumerate(report["nodes"], start=1):
+        node["name"] = f"DataNode {i}"
+        node["status"] = "LIVE"
+
+    report["namenode"] = {
+        "name": "NameNode (Master)",
+        "host": "namenode",
+        "rpc_port": 9000,
+        "web_port": 9870,
+        "status": "ACTIVE",
+        "live_datanodes": report["summary"].get("live_datanodes", len(report["nodes"])),
+        "total_capacity": report["summary"].get("configured_capacity", 0),
+        "dfs_used": report["summary"].get("dfs_used", 0),
+        "dfs_remaining": report["summary"].get("dfs_remaining", 0),
+        "dfs_used_pct": report["summary"].get("dfs_used_pct", 0),
+    }
+
+    _HDFS_REPORT_CACHE["data"] = report
+    _HDFS_REPORT_CACHE["ts"] = now
     return report
 
 
 def get_hdfs_fsck():
-    """Run hdfs fsck on the dataset path."""
+    """Run hdfs fsck on the dataset path with block locations and sizes."""
+    global _HDFS_FSCK_CACHE
+    now = time.time()
+    if _HDFS_FSCK_CACHE["data"] and (now - _HDFS_FSCK_CACHE["ts"]) < 10:
+        return _HDFS_FSCK_CACHE["data"]
+
     res = _run_docker_exec("namenode", [
-        "hdfs", "fsck", "/user/data/raw_logs/access_log", "-files", "-blocks"
+        "hdfs", "fsck", "/user/data/raw_logs/access_log", "-files", "-blocks", "-locations"
     ])
     if res["status"] == "error":
-        return {"available": False, "message": "HDFS fsck unavailable", "raw": ""}
+        return {"available": False, "message": "HDFS fsck unavailable", "raw": "", "blocks": []}
 
     output = res["output"]
     fsck = {"available": True, "raw": output, "blocks": []}
@@ -212,6 +255,21 @@ def get_hdfs_fsck():
             val = m.group(1)
             fsck[key] = float(val) if "." in val else int(val)
 
+    # Parse individual block details and locations
+    block_pattern = re.compile(r'(\d+)\.\s+.*?(blk_\d+_\d+)\s+len=(\d+)\s+Live_repl=(\d+)\s+\[(.*)\]')
+    for m in block_pattern.finditer(output):
+        idx, blk_id, length, repl, locs = m.groups()
+        node_ips = re.findall(r'(\d+\.\d+\.\d+\.\d+:\d+)', locs)
+        fsck["blocks"].append({
+            "index": int(idx),
+            "block_id": blk_id,
+            "size_bytes": int(length),
+            "replicas": int(repl),
+            "locations": node_ips,
+        })
+
+    _HDFS_FSCK_CACHE["data"] = fsck
+    _HDFS_FSCK_CACHE["ts"] = now
     return fsck
 
 
@@ -223,7 +281,7 @@ def get_mapreduce_results(task="status"):
         return {"available": False, "task": task, "results": {}, "rows": [], "error": "Unknown task"}
 
     output_path = task_config["output"]
-    res = _run_docker_exec("namenode", ["bash", "-lc", f"hdfs dfs -cat {output_path}/part-* 2>/dev/null"])
+    res = _run_docker_exec("namenode", ["bash", "-c", f"hdfs dfs -cat {output_path}/part-* 2>/dev/null"])
     if res["status"] == "error" or not res["output"].strip():
         return {"available": False, "task": task, "results": {}, "rows": [],
                 "task_name": task_config["name"], "chart_type": task_config["chart"]}
