@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom'
 import { useState, useEffect } from 'react'
+import { API_BASE } from './hooks/useApi'
 import Overview from './pages/Overview'
 import BatchWorkspace from './pages/BatchWorkspace'
 import StreamWorkspace from './pages/StreamWorkspace'
@@ -77,7 +78,7 @@ function AppShell() {
   useEffect(() => {
     const check = async () => {
       try {
-        const r = await fetch('/api/health')
+        const r = await fetch(`${API_BASE}/health`)
         setHealth(await r.json())
       } catch {
         setHealth({ ok: false, mongo: false, hdfs: false, dataset: false })

@@ -1,9 +1,31 @@
 /**
  * Custom hooks for API communication and WebSocket connections.
+ *
+ * Set VITE_API_URL in a .env file or Render environment to point at your
+ * backend tunnel (e.g. https://xxxx.ngrok-free.app).
+ * When unset, everything falls back to relative "/api" paths which are
+ * handled by the Vite dev-server proxy — zero local-dev behaviour change.
  */
 import { useState, useEffect, useRef, useCallback } from 'react'
 
-const API_BASE = '/api'
+// ── Configurable backend base ───────────────────────────────────
+// VITE_API_URL examples:
+//   Local dev  (unset)  → API_BASE = "/api"   (proxied by Vite)
+//   Production          → API_BASE = "https://xxxx.ngrok-free.app/api"
+const _backendOrigin = import.meta.env.VITE_API_URL || ''   // '' for local
+export const API_BASE = `${_backendOrigin}/api`
+
+/** Derive a WebSocket base from the configured backend origin.
+ *  Local dev  → ws://localhost:3000   (proxied by Vite)
+ *  Production → wss://xxxx.ngrok-free.app
+ */
+function wsBase() {
+  if (_backendOrigin) {
+    return _backendOrigin.replace(/^http/, 'ws')
+  }
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${window.location.host}`
+}
 
 /** Generic fetch with JSON parsing and error handling. */
 export async function apiFetch(path, opts = {}) {
@@ -17,7 +39,8 @@ export async function apiFetch(path, opts = {}) {
 
 /** POST helper. */
 export async function apiPost(path, params = {}) {
-  const url = new URL(`${API_BASE}${path}`, window.location.origin)
+  const base = _backendOrigin || window.location.origin
+  const url = new URL(`/api${path}`, base)
   Object.entries(params).forEach(([k, v]) => {
     if (v !== undefined && v !== null) url.searchParams.set(k, v)
   })
@@ -71,8 +94,7 @@ export function useWebSocket(path, options = {}) {
 
   const connect = useCallback(() => {
     if (!enabled) return
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const url = `${protocol}//${window.location.host}${path}`
+    const url = `${wsBase()}${path}`
     try {
       const ws = new WebSocket(url)
       ws.onopen = () => setConnected(true)

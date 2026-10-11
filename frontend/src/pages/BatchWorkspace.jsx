@@ -3,7 +3,7 @@ import {
   BarChart, Bar, LineChart, Line, AreaChart, Area, PieChart, Pie, Cell,
   ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Treemap, Legend
 } from 'recharts'
-import { usePolling, apiFetch, apiPost, formatBytes, formatNumber, CHART_COLORS } from '../hooks/useApi'
+import { usePolling, apiFetch, apiPost, formatBytes, formatNumber, CHART_COLORS, API_BASE } from '../hooks/useApi'
 
 const CHART_THEME = {
   axisStroke: '#333448',
@@ -412,7 +412,7 @@ export default function BatchWorkspace() {
   }
 
   const handleExport = async (format) => {
-    window.open(`/api/export/batch/${selectedTask}?format=${format}`, '_blank')
+    window.open(`${API_BASE}/export/batch/${selectedTask}?format=${format}`, '_blank')
   }
 
   // Save reproducible experiment config
