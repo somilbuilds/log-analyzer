@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Emit DayOfWeek:Hour heatmap key: DOW:HH\t1"""
+"""Emit DayOfWeek Hour heatmap key: DOW HH\t1 (space-separated for frontend)"""
 import re, sys
 from datetime import datetime
 MONTHS = {'Jan':1,'Feb':2,'Mar':3,'Apr':4,'May':5,'Jun':6,'Jul':7,'Aug':8,'Sep':9,'Oct':10,'Nov':11,'Dec':12}
@@ -12,6 +12,6 @@ for line in sys.stdin:
         mo = MONTHS.get(mon, 1)
         try:
             dow = DOW[datetime(y, mo, d).weekday()]
-            print("{}:{}\t1".format(dow, h))
+            print("{} {}\t1".format(dow, h))
         except ValueError:
             pass

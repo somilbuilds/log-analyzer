@@ -13,9 +13,12 @@ for line in sys.stdin:
     if m:
         val = m.group(1)
         if val == '-':
-            print("0B\t1")
+            print("MISSING\t1")
             continue
         v = int(val)
+        if v == 0:
+            print("0B\t1")
+            continue
         label = ">{}".format(bucket_label(BUCKETS[-1]))
         for i in range(len(BUCKETS)-1):
             if BUCKETS[i] <= v < BUCKETS[i+1]:

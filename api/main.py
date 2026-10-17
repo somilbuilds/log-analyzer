@@ -32,7 +32,7 @@ from api.queries import (
 )
 from api.hadoop import (
     get_hdfs_status, get_mapreduce_results, get_dataset_info,
-    get_hdfs_report, get_hdfs_fsck,
+    get_hdfs_report, get_hdfs_fsck, ensure_hdfs_dataset,
     TASK_CATALOG,
 )
 
@@ -200,13 +200,16 @@ def mapreduce_status():
     proc = demo_procs.get("mapreduce")
     if proc is None:
         return {"running": False, "status": "idle", "task": mapreduce_task["value"]}
-    if proc.poll() is None:
+    rc = proc.poll()
+    if rc is None:
         return {"running": True, "status": "running", "task": mapreduce_task["value"]}
+    status = "completed" if rc == 0 else "failed"
     return {
         "running": False,
-        "status": "completed" if proc.returncode == 0 else "failed",
-        "code": proc.returncode,
+        "status": status,
+        "code": rc,
         "task": mapreduce_task["value"],
+        "success": rc == 0,
     }
 
 
@@ -222,8 +225,11 @@ def start_mapreduce(task: str = "status"):
         return {"status": "error", "detail": "MapReduce job already running"}
 
     try:
+        # Ensure dataset is available before running
+        ensure_hdfs_dataset()
+
         batch_dir = os.path.join(base_dir, "batch")
-        subprocess.run(["docker", "cp", batch_dir, "namenode:/tmp/batch"], check=False)
+        subprocess.run(["docker", "cp", batch_dir, "namenode:/tmp/batch"], check=True, timeout=30)
 
         mapreduce_task["value"] = task
         log_file = open(os.path.join(log_dir, "mapreduce.log"), "w")

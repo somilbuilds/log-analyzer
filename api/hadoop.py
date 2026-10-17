@@ -14,6 +14,7 @@ _HDFS_REPORT_CACHE = {"data": None, "ts": 0}
 _HDFS_FSCK_CACHE = {"data": None, "ts": 0}
 
 # ── 25-Task Analytical Catalog ───────────────────────────────────
+# Every task has a UNIQUE output directory to prevent cross-task overwrites.
 
 TASK_CATALOG = [
     # Category 1 — Hosts and request volume
@@ -31,43 +32,92 @@ TASK_CATALOG = [
     {"id": "status_5xx",  "name": "5xx Server Errors",            "category": "Responses & Errors", "mapper": "status5xx_mapper.py",     "reducer": "reducer.py",     "output": "/user/data/results/status_5xx",      "chart": "bar",    "description": "Breakdown of 5xx server error codes"},
     {"id": "error_paths", "name": "Error-Producing Paths",        "category": "Responses & Errors", "mapper": "error_path_mapper.py",    "reducer": "reducer.py",     "output": "/user/data/results/error_paths",     "chart": "bar",    "description": "URL paths that produced the most 4xx/5xx errors"},
     {"id": "error_hosts", "name": "High-Error Clients",           "category": "Responses & Errors", "mapper": "error_host_mapper.py",    "reducer": "reducer.py",     "output": "/user/data/results/error_hosts",     "chart": "bar",    "description": "Client IPs with the highest 4xx/5xx error counts"},
-    {"id": "method_status","name": "Method × Status Cross-Tab",   "category": "Responses & Errors", "mapper": "method_status_mapper.py", "reducer": "reducer.py",     "output": "/user/data/results/method_status",   "chart": "stacked","description": "HTTP method versus status code cross-tabulation"},
-    {"id": "error_rate_day","name": "Error Rate Over Time",       "category": "Responses & Errors", "mapper": "error_rate_day_mapper.py","reducer": "reducer.py",     "output": "/user/data/results/error_rate_day",  "chart": "line",   "description": "Daily error rates (total vs error requests by day)"},
+    {"id": "method_status","name": "Method × Status Cross-Tab",   "category": "Responses & Errors", "mapper": "method_status_mapper.py", "reducer": "method_status_reducer.py", "output": "/user/data/results/method_status",   "chart": "stacked","description": "HTTP method versus status code cross-tabulation"},
+    {"id": "error_rate_day","name": "Error Rate Over Time",       "category": "Responses & Errors", "mapper": "error_rate_day_mapper.py","reducer": "error_rate_day_reducer.py", "output": "/user/data/results/error_rate_day",  "chart": "line",   "description": "Daily error rates (total vs error requests by day)"},
 
     # Category 3 — Traffic characteristics
     {"id": "bytes_dist",  "name": "Response Size Distribution",   "category": "Traffic",            "mapper": "bytes_mapper.py",         "reducer": "reducer.py",     "output": "/user/data/results/bytes_dist",      "chart": "histogram","description": "Histogram of response sizes by bucket"},
     {"id": "bytes_path",  "name": "Bandwidth by Path",            "category": "Traffic",            "mapper": "bytes_total_mapper.py",   "reducer": "sum_reducer.py", "output": "/user/data/results/bytes_path",      "chart": "bar",    "description": "Total bytes transferred per URL path"},
     {"id": "bytes_host",  "name": "Traffic Volume by Client",     "category": "Traffic",            "mapper": "host_bytes_mapper.py",    "reducer": "sum_reducer.py", "output": "/user/data/results/bytes_host",      "chart": "bar",    "description": "Total bytes transferred per client IP"},
 
-    # Category 4 — Behavioral and security-oriented
-    {"id": "high_rate_hosts",  "name": "High-Rate Clients",        "category": "Security",          "mapper": "host_mapper.py",          "reducer": "reducer.py",     "output": "/user/data/results/top_hosts",       "chart": "bar",    "description": "Clients with highest request rates (indicator only)"},
-    {"id": "failed_requests",  "name": "Repeated Failed Requests", "category": "Security",          "mapper": "error_host_mapper.py",    "reducer": "reducer.py",     "output": "/user/data/results/error_hosts",     "chart": "bar",    "description": "Clients with repeated 4xx/5xx responses (potential probing)"},
-    {"id": "unusual_paths",    "name": "Rare Paths",               "category": "Security",          "mapper": "endpoint_mapper.py",      "reducer": "reducer.py",     "output": "/user/data/results/top_endpoints",   "chart": "table",  "description": "Least common requested paths (statistical outliers)"},
-    {"id": "suspicious_combos","name": "Suspicious Method+Status", "category": "Security",          "mapper": "method_status_mapper.py", "reducer": "reducer.py",     "output": "/user/data/results/method_status",   "chart": "table",  "description": "Unusual HTTP method and status combinations"},
-    {"id": "rare_status",      "name": "Rare Status Codes",        "category": "Security",          "mapper": "status_mapper.py",        "reducer": "reducer.py",     "output": "/user/data/results/status_counts",   "chart": "table",  "description": "Least-common HTTP status codes"},
+    # Category 4 — Behavioral and security-oriented (unique output dirs)
+    {"id": "high_rate_hosts",  "name": "High-Rate Clients",        "category": "Security",          "mapper": "host_mapper.py",          "reducer": "reducer.py",     "output": "/user/data/results/high_rate_hosts",       "chart": "bar",    "description": "Clients with highest request counts (potential high-rate)"},
+    {"id": "failed_requests",  "name": "Repeated Failed Requests", "category": "Security",          "mapper": "error_host_mapper.py",    "reducer": "reducer.py",     "output": "/user/data/results/failed_requests",     "chart": "bar",    "description": "Clients with repeated 4xx/5xx responses (potential probing)"},
+    {"id": "unusual_paths",    "name": "Rare Paths",               "category": "Security",          "mapper": "endpoint_mapper.py",      "reducer": "reducer.py",     "output": "/user/data/results/unusual_paths",   "chart": "table",  "description": "Least common requested paths (statistical outliers)"},
+    {"id": "suspicious_combos","name": "Suspicious Method+Status", "category": "Security",          "mapper": "method_status_mapper.py", "reducer": "method_status_reducer.py", "output": "/user/data/results/suspicious_combos",   "chart": "table",  "description": "Unusual HTTP method and status combinations"},
+    {"id": "rare_status",      "name": "Rare Status Codes",        "category": "Security",          "mapper": "status_mapper.py",        "reducer": "reducer.py",     "output": "/user/data/results/rare_status",     "chart": "table",  "description": "Least-common HTTP status codes"},
 
-    # Additional analyses
-    {"id": "volume_time",      "name": "Request Volume Over Time", "category": "Hosts & Volume",     "mapper": "day_mapper.py",          "reducer": "reducer.py",     "output": "/user/data/results/daily",           "chart": "area",   "description": "Request volume time series by day"},
-    {"id": "host_concentration","name": "Client Concentration",    "category": "Traffic",            "mapper": "host_mapper.py",          "reducer": "reducer.py",     "output": "/user/data/results/top_hosts",       "chart": "pareto", "description": "Traffic share analysis — what fraction of clients produce what fraction of traffic"},
-    {"id": "path_popularity",  "name": "Path Popularity Time",     "category": "Traffic",            "mapper": "endpoint_mapper.py",      "reducer": "reducer.py",     "output": "/user/data/results/top_endpoints",   "chart": "treemap","description": "Resource popularity ranked view"},
-    {"id": "malformed",        "name": "Malformed Records",        "category": "Traffic",            "mapper": "status_mapper.py",        "reducer": "reducer.py",     "output": "/user/data/results/status_counts",   "chart": "table",  "description": "Records that failed CLF parsing (estimated from status=0)"},
+    # Additional analyses (unique output dirs)
+    {"id": "volume_time",      "name": "Request Volume Over Time", "category": "Hosts & Volume",     "mapper": "day_mapper.py",          "reducer": "reducer.py",     "output": "/user/data/results/volume_time",     "chart": "area",   "description": "Request volume time series by day"},
+    {"id": "host_concentration","name": "Client Concentration",    "category": "Traffic",            "mapper": "host_mapper.py",          "reducer": "reducer.py",     "output": "/user/data/results/host_concentration", "chart": "pareto", "description": "Traffic share analysis — what fraction of clients produce what fraction of traffic"},
+    {"id": "path_popularity",  "name": "Path Popularity",          "category": "Traffic",            "mapper": "endpoint_mapper.py",      "reducer": "reducer.py",     "output": "/user/data/results/path_popularity", "chart": "treemap","description": "Resource popularity ranked view"},
+    {"id": "malformed",        "name": "Malformed Records",        "category": "Traffic",            "mapper": "malformed_mapper.py",     "reducer": "reducer.py",     "output": "/user/data/results/malformed",       "chart": "table",  "description": "Records that failed CLF parsing"},
 ]
 
 # Build lookup from id → task config
 _TASK_LOOKUP = {t["id"]: t for t in TASK_CATALOG}
+
+# Tasks that need ascending sort (rarest first)
+_ASCENDING_SORT_TASKS = {"rare_status", "unusual_paths"}
+
+# Tasks that need chronological sort (by key, not count)
+_CHRONOLOGICAL_SORT_TASKS = {"hourly", "daily", "volume_time", "error_rate_day"}
+
+# Tasks with multi-column output (METHOD\tSTATUS\tCOUNT)
+_MULTI_COL_TASKS = {"method_status", "suspicious_combos"}
+
+# Tasks with error_rate_day format (DAY\tTOTAL\tERROR\tPCT)
+_ERROR_RATE_TASKS = {"error_rate_day"}
+
+
+# Maximum bytes to read from HDFS result output (10 MB)
+_MAX_RESULT_BYTES = 10 * 1024 * 1024
+
+# Lines that are Hadoop diagnostic noise — not actual result rows
+_NOISE_PREFIXES = (
+    "WARNING:", "INFO:", "DEBUG:", "ERROR:",
+    "log4j:", "SLF4J:",
+    "Connecting to", "DEPRECATED:",
+    "  ",  # indented continuation lines from diagnostic output
+)
+
+
+def _is_noise_line(line):
+    """Return True if `line` is Hadoop diagnostic output, not a result row."""
+    stripped = line.lstrip()
+    if not stripped:
+        return True
+    # If the line contains a tab, it's likely a valid result row (key\tvalue)
+    if '\t' in line:
+        return False
+    # Lines matching known noise prefixes
+    for prefix in _NOISE_PREFIXES:
+        if stripped.startswith(prefix):
+            return True
+    # Java-style log lines: "2024-01-01 ...", or "24/01/01 ..."
+    # These are yyyy-mm-dd or yy/mm/dd timestamps from Hadoop/Java logging
+    if len(stripped) > 10 and (stripped[4] == '-' or stripped[2] == '/'):
+        parts = stripped.split(None, 2)
+        if len(parts) >= 2 and (':' in parts[1]):
+            return True
+    return False
 
 
 def _run_docker_exec(container, cmd, timeout=10):
     try:
         result = subprocess.run(
             ["docker", "exec", container] + cmd,
-            capture_output=True, text=True, check=True, timeout=timeout,
+            capture_output=True, text=False, check=True, timeout=timeout,
         )
-        return {"status": "success", "output": result.stdout}
+        # Decode as UTF-8 with replacement to handle non-UTF-8 bytes
+        stdout = result.stdout.decode('utf-8', errors='replace')
+        return {"status": "success", "output": stdout}
     except subprocess.TimeoutExpired:
         return {"status": "error", "output": "Command timed out"}
     except subprocess.CalledProcessError as e:
-        return {"status": "error", "output": e.stderr or e.stdout}
+        stderr_text = (e.stderr or b'').decode('utf-8', errors='replace') if isinstance(e.stderr, bytes) else (e.stderr or '')
+        stdout_text = (e.stdout or b'').decode('utf-8', errors='replace') if isinstance(e.stdout, bytes) else (e.stdout or '')
+        return {"status": "error", "output": stderr_text or stdout_text or "Command failed"}
     except Exception as e:
         return {"status": "error", "output": str(e)}
 
@@ -275,32 +325,162 @@ def get_hdfs_fsck():
 
 # ── MapReduce Results ────────────────────────────────────────────
 
+def _parse_date_key(key):
+    """Try to parse DD/Mon/YYYY into a sortable tuple for chronological ordering."""
+    import calendar
+    months = {v: k for k, v in enumerate(calendar.month_abbr) if v}
+    try:
+        parts = key.split("/")
+        if len(parts) == 3:
+            day, mon, year = parts
+            return (int(year), months.get(mon, 0), int(day))
+    except (ValueError, IndexError):
+        pass
+    return (9999, 99, 99)  # sort unknowns last
+
+
 def get_mapreduce_results(task="status"):
     task_config = _TASK_LOOKUP.get(task)
     if not task_config:
         return {"available": False, "task": task, "results": {}, "rows": [], "error": "Unknown task"}
 
     output_path = task_config["output"]
-    res = _run_docker_exec("namenode", ["bash", "-c", f"hdfs dfs -cat {output_path}/part-* 2>/dev/null"])
-    if res["status"] == "error" or not res["output"].strip():
-        return {"available": False, "task": task, "results": {}, "rows": [],
-                "task_name": task_config["name"], "chart_type": task_config["chart"]}
 
-    results = {}
+    # Use a generous timeout (60s) to handle large result files across
+    # the Docker+HDFS stack without false "Command timed out" errors.
+    # Redirect stderr to /dev/null so Hadoop diagnostic messages don't
+    # contaminate the result stream.
+    res = _run_docker_exec(
+        "namenode",
+        ["bash", "-c", f"hdfs dfs -cat {output_path}/part-* 2>/dev/null"],
+        timeout=60,
+    )
+
+    if res["status"] == "error":
+        return {"available": False, "task": task, "results": {}, "rows": [],
+                "task_name": task_config["name"], "chart_type": task_config["chart"],
+                "error": "HDFS read failed: " + res.get("output", "unknown error")}
+
+    raw_output = res["output"]
+
+    # Guard against gigantic outputs: truncate to _MAX_RESULT_BYTES
+    if len(raw_output) > _MAX_RESULT_BYTES:
+        # Truncate to last complete line within the limit
+        raw_output = raw_output[:_MAX_RESULT_BYTES]
+        last_nl = raw_output.rfind('\n')
+        if last_nl > 0:
+            raw_output = raw_output[:last_nl]
+
+    # Strip Hadoop diagnostic noise lines before parsing
+    clean_lines = [line for line in raw_output.split('\n') if not _is_noise_line(line)]
+    raw_output = '\n'.join(clean_lines).strip()
+
+    if not raw_output:
+        return {"available": False, "task": task, "results": {}, "rows": [],
+                "task_name": task_config["name"], "chart_type": task_config["chart"],
+                "error": "No output data found in HDFS"}
+
+    # ── Task-specific parsing ────────────────────────────────────
+
+    # error_rate_day: DAY\tTOTAL\tERROR\tPCT
+    if task in _ERROR_RATE_TASKS:
+        return _parse_error_rate_results(task, task_config, raw_output)
+
+    # method_status / suspicious_combos: METHOD\tSTATUS\tCOUNT
+    if task in _MULTI_COL_TASKS:
+        return _parse_multi_col_results(task, task_config, raw_output)
+
+    # Standard key\tcount parsing
+    return _parse_standard_results(task, task_config, raw_output)
+
+
+def _parse_error_rate_results(task, task_config, raw_output):
+    """Parse error_rate_day output: DAY\tTOTAL\tERROR\tPCT"""
     rows = []
-    total = 0
-    for line in res["output"].strip().split("\n"):
+    for line in raw_output.split("\n"):
         parts = line.split("\t")
-        if len(parts) == 2:
-            key = parts[0]
+        if len(parts) >= 4:
             try:
-                count = int(parts[1])
+                day = parts[0]
+                total = int(parts[1])
+                error = int(parts[2])
+                pct = float(parts[3])
+                rows.append({"key": day, "total": total, "error": error, "error_pct": pct, "count": error})
+            except (ValueError, IndexError):
+                continue
+        elif len(parts) == 2:
+            # Fallback for legacy key\tcount format
+            try:
+                rows.append({"key": parts[0], "count": int(parts[1])})
             except ValueError:
                 continue
-            results[key] = count
-            rows.append({"key": key, "count": count})
-            total += count
-    rows.sort(key=lambda row: row["count"], reverse=True)
+
+    # Chronological sort by date
+    rows.sort(key=lambda r: _parse_date_key(r["key"]))
+
+    total_requests = sum(r.get("total", r.get("count", 0)) for r in rows)
+    total_errors = sum(r.get("error", 0) for r in rows)
+
+    return {
+        "available": True,
+        "task": task,
+        "task_name": task_config["name"],
+        "category": task_config["category"],
+        "chart_type": task_config["chart"],
+        "description": task_config["description"],
+        "results": {r["key"]: r.get("error_pct", r.get("count", 0)) for r in rows},
+        "rows": rows,
+        "total": total_requests,
+        "total_errors": total_errors,
+        "total_keys": len(rows),
+    }
+
+
+def _parse_multi_col_results(task, task_config, raw_output):
+    """Parse method_status output: METHOD\tSTATUS\tCOUNT"""
+    rows = []
+    results = {}
+    total = 0
+    methods_set = set()
+    statuses_set = set()
+
+    for line in raw_output.split("\n"):
+        parts = line.split("\t")
+        if len(parts) >= 3:
+            try:
+                method = parts[0]
+                status = parts[1]
+                count = int(parts[2])
+                key = f"{method}:{status}"
+                rows.append({"key": key, "method": method, "status": status, "count": count})
+                results[key] = count
+                total += count
+                methods_set.add(method)
+                statuses_set.add(status)
+            except (ValueError, IndexError):
+                continue
+        elif len(parts) == 2:
+            # Fallback: composite key\tcount
+            try:
+                key = parts[0]
+                count = int(parts[1])
+                if ":" in key:
+                    method, status = key.split(":", 1)
+                    rows.append({"key": key, "method": method, "status": status, "count": count})
+                    methods_set.add(method)
+                    statuses_set.add(status)
+                else:
+                    rows.append({"key": key, "count": count})
+                results[key] = count
+                total += count
+            except ValueError:
+                continue
+
+    # Sort by count descending for display, ascending for rare/suspicious
+    if task in _ASCENDING_SORT_TASKS or task == "suspicious_combos":
+        rows.sort(key=lambda r: r["count"])
+    else:
+        rows.sort(key=lambda r: r["count"], reverse=True)
 
     return {
         "available": True,
@@ -310,10 +490,71 @@ def get_mapreduce_results(task="status"):
         "chart_type": task_config["chart"],
         "description": task_config["description"],
         "results": results,
-        "rows": rows[:100],
+        "rows": rows[:200],
+        "total": total,
+        "total_keys": len(rows),
+        "methods": sorted(methods_set),
+        "statuses": sorted(statuses_set),
+    }
+
+
+def _parse_standard_results(task, task_config, raw_output):
+    """Parse standard key\tcount output with task-specific sorting."""
+    results = {}
+    rows = []
+    total = 0
+    parse_errors = 0
+
+    for line in raw_output.split("\n"):
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 2:
+            key = parts[0]
+            try:
+                count = int(parts[1])
+            except ValueError:
+                parse_errors += 1
+                continue
+            results[key] = count
+            rows.append({"key": key, "count": count})
+            total += count
+        else:
+            parse_errors += 1
+
+    # Task-specific sorting
+    if task in _ASCENDING_SORT_TASKS:
+        rows.sort(key=lambda r: r["count"])
+    elif task in _CHRONOLOGICAL_SORT_TASKS:
+        if task == "hourly":
+            # Sort by hour numerically: "00", "01", ..., "23"
+            rows.sort(key=lambda r: r["key"])
+        elif task in ("daily", "volume_time"):
+            # Sort by date chronologically
+            rows.sort(key=lambda r: _parse_date_key(r["key"]))
+        else:
+            rows.sort(key=lambda r: r["key"])
+    else:
+        # Default: descending by count
+        rows.sort(key=lambda r: r["count"], reverse=True)
+
+    response = {
+        "available": True,
+        "task": task,
+        "task_name": task_config["name"],
+        "category": task_config["category"],
+        "chart_type": task_config["chart"],
+        "description": task_config["description"],
+        "results": results,
+        "rows": rows[:200],
         "total": total,
         "total_keys": len(rows),
     }
+
+    if parse_errors > 0:
+        response["parse_errors"] = parse_errors
+
+    return response
 
 
 # ── Dataset Info ─────────────────────────────────────────────────
