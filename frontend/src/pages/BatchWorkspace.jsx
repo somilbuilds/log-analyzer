@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   BarChart, Bar, LineChart, Line, AreaChart, Area, PieChart, Pie, Cell,
   ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Treemap, Legend
@@ -447,7 +447,6 @@ export default function BatchWorkspace() {
 
   const [selectedTask, setSelectedTask] = useState('status')
   const [taskResults, setTaskResults] = useState({})
-  const [resultsLoading, setResultsLoading] = useState(false)
   const [viewMode, setViewMode] = useState('auto') // auto | chart | table | findings | compare
   const [topN, setTopN] = useState(25)
   const [search, setSearch] = useState('')
@@ -458,8 +457,21 @@ export default function BatchWorkspace() {
   const [compareResults, setCompareResults] = useState(null)
   const [compareLoading, setCompareLoading] = useState(false)
 
+  // Per-task loading: which tasks currently have an in-flight fetch
+  const [loadingTasks, setLoadingTasks] = useState(new Set())
+
   // Track which tasks have had results explicitly loaded by user action
   const [fetchedTasks, setFetchedTasks] = useState(new Set())
+
+  // Per-task execution state: { [taskId]: 'idle'|'running'|'completed'|'failed' }
+  const [taskRunState, setTaskRunState] = useState({})
+
+  // Monotonic request counter — used to discard stale responses
+  const requestIdRef = useRef(0)
+  // Map from task ID → latest request ID for that task
+  const taskRequestIdRef = useRef({})
+
+  const [runError, setRunError] = useState(null)
 
   const tasks = catalog?.tasks || []
   const taskConfig = tasks.find(t => t.id === selectedTask)
@@ -478,18 +490,31 @@ export default function BatchWorkspace() {
     return map
   }, [tasks, search])
 
-  // Load primary results for a specific task — only called by explicit user action
+  // Load primary results for a specific task — only called by explicit user action.
+  // Uses a request counter to discard stale responses from out-of-order fetches.
   const loadResults = useCallback(async (taskId) => {
-    setResultsLoading(true)
+    const reqId = ++requestIdRef.current
+    taskRequestIdRef.current[taskId] = reqId
+
+    setLoadingTasks(prev => new Set(prev).add(taskId))
     try {
       const r = await apiFetch(`/mapreduce/results?task=${taskId}`)
-      setTaskResults(prev => ({ ...prev, [taskId]: r }))
-      setFetchedTasks(prev => new Set(prev).add(taskId))
+      // Only accept result if this is still the latest request for this task
+      if (taskRequestIdRef.current[taskId] === reqId) {
+        setTaskResults(prev => ({ ...prev, [taskId]: r }))
+        setFetchedTasks(prev => new Set(prev).add(taskId))
+      }
     } catch (e) {
-      setTaskResults(prev => ({ ...prev, [taskId]: { available: false, error: e.message, rows: [] } }))
-      setFetchedTasks(prev => new Set(prev).add(taskId))
+      if (taskRequestIdRef.current[taskId] === reqId) {
+        setTaskResults(prev => ({ ...prev, [taskId]: { available: false, error: e.message, rows: [] } }))
+        setFetchedTasks(prev => new Set(prev).add(taskId))
+      }
     }
-    setResultsLoading(false)
+    setLoadingTasks(prev => {
+      const next = new Set(prev)
+      next.delete(taskId)
+      return next
+    })
   }, [])
 
   // Load comparison results
@@ -513,44 +538,48 @@ export default function BatchWorkspace() {
   // NO automatic results loading on task selection.
   // The user must explicitly click "Load Results" or "Start MapReduce".
 
-  const [activeRunningTask, setActiveRunningTask] = useState(null)
-  const [runError, setRunError] = useState(null)
-  const [lastJobFailed, setLastJobFailed] = useState(false)
-
-  // Watch mrStatus transitions: when job stops running, check success vs failure
+  // Watch mrStatus transitions: when a job stops running, update per-task state
   useEffect(() => {
-    if (activeRunningTask && mrStatus && !mrStatus.running) {
-      const finishedTask = activeRunningTask
-      setActiveRunningTask(null)
+    if (!mrStatus) return
+    const jobTask = mrStatus.task
+    if (!jobTask) return
 
-      if (mrStatus.status === 'failed' || mrStatus.success === false) {
-        setLastJobFailed(true)
-        setRunError(`MapReduce job failed (exit code ${mrStatus.code || '?'}). Check logs/mapreduce.log for details.`)
-      } else {
-        setLastJobFailed(false)
-        // Only reload results on success — this is an explicit consequence of user-initiated run
-        loadResults(finishedTask)
-      }
+    if (mrStatus.running) {
+      // Mark this task as running (in case it was started outside this session)
+      setTaskRunState(prev => ({ ...prev, [jobTask]: 'running' }))
+    } else if (mrStatus.status === 'completed' || mrStatus.success === true) {
+      setTaskRunState(prev => {
+        if (prev[jobTask] === 'running') {
+          // Job just finished successfully — auto-load results for this task
+          loadResults(jobTask)
+          return { ...prev, [jobTask]: 'completed' }
+        }
+        return prev
+      })
+    } else if (mrStatus.status === 'failed' || mrStatus.success === false) {
+      setTaskRunState(prev => {
+        if (prev[jobTask] === 'running') {
+          setRunError(`MapReduce job failed (exit code ${mrStatus.code || '?'}). Check logs/mapreduce.log for details.`)
+          return { ...prev, [jobTask]: 'failed' }
+        }
+        return prev
+      })
     }
-  }, [mrStatus?.running, mrStatus?.status, activeRunningTask, loadResults])
+  }, [mrStatus?.running, mrStatus?.status, mrStatus?.task, loadResults])
 
   const handleSelectTask = useCallback((taskId) => {
     setSelectedTask(taskId)
-    setLastJobFailed(false)
     setRunError(null)
     // Do NOT auto-load results or auto-execute anything
   }, [])
 
   const handleRun = async () => {
     setRunError(null)
-    setLastJobFailed(false)
-    setActiveRunningTask(selectedTask)
-    setResultsLoading(true)
+    setTaskRunState(prev => ({ ...prev, [selectedTask]: 'running' }))
     const res = await apiPost('/mapreduce/run', { task: selectedTask })
     if (res?.status === 'error') {
       setRunError(res.detail || 'MapReduce job already in progress or cluster busy.')
-      setActiveRunningTask(null)
-      setResultsLoading(false)
+      setTaskRunState(prev => ({ ...prev, [selectedTask]: 'idle' }))
     }
     refetchStatus()
   }
@@ -588,7 +617,12 @@ export default function BatchWorkspace() {
   const hasFetched = fetchedTasks.has(selectedTask)
   const hasCachedOutput = Boolean(taskResult?.available && taskResult?.rows?.length > 0)
   const hasError = Boolean(hasFetched && taskResult?.error && !taskResult?.available)
-  const isRunning = (mrStatus?.running && mrStatus?.task === selectedTask) || activeRunningTask === selectedTask
+  const resultsLoading = loadingTasks.has(selectedTask)
+
+  // Derive job status from explicit per-task execution state, NOT from results.
+  const taskExecState = taskRunState[selectedTask] || 'idle'
+  const isRunning = taskExecState === 'running'
+  const lastJobFailed = taskExecState === 'failed'
   const jobStatus = isRunning ? 'running' : lastJobFailed ? 'failed' : hasCachedOutput ? 'completed' : 'idle'
 
   // Determine the effective view mode

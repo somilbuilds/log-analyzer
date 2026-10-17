@@ -14,48 +14,52 @@ _HDFS_REPORT_CACHE = {"data": None, "ts": 0}
 _HDFS_FSCK_CACHE = {"data": None, "ts": 0}
 
 # ── 25-Task Analytical Catalog ───────────────────────────────────
-# Every task has a UNIQUE output directory to prevent cross-task overwrites.
+# Every task has output = /user/data/results/<task_id>.  The path is the
+# task *id* so no two tasks can ever share or overwrite a result directory.
 
 TASK_CATALOG = [
     # Category 1 — Hosts and request volume
-    {"id": "hosts",       "name": "Top Client IPs",              "category": "Hosts & Volume",     "mapper": "host_mapper.py",          "reducer": "reducer.py",     "output": "/user/data/results/top_hosts",       "chart": "bar",    "description": "Rank client IPs by request count"},
-    {"id": "endpoints",   "name": "Top Requested Paths",         "category": "Hosts & Volume",     "mapper": "endpoint_mapper.py",      "reducer": "reducer.py",     "output": "/user/data/results/top_endpoints",   "chart": "bar",    "description": "Most frequently requested URL paths"},
-    {"id": "extensions",  "name": "File Extension Distribution",  "category": "Hosts & Volume",     "mapper": "extension_mapper.py",     "reducer": "reducer.py",     "output": "/user/data/results/extensions",      "chart": "bar",    "description": "Distribution of requested file types"},
-    {"id": "methods",     "name": "HTTP Method Distribution",     "category": "Hosts & Volume",     "mapper": "method_mapper.py",        "reducer": "reducer.py",     "output": "/user/data/results/methods",         "chart": "pie",    "description": "Breakdown by HTTP method (GET, POST, HEAD, etc.)"},
-    {"id": "hourly",      "name": "Requests by Hour",             "category": "Hosts & Volume",     "mapper": "hour_mapper.py",          "reducer": "reducer.py",     "output": "/user/data/results/hourly",          "chart": "line",   "description": "Request volume by hour of day (0–23)"},
-    {"id": "daily",       "name": "Requests by Day",              "category": "Hosts & Volume",     "mapper": "day_mapper.py",           "reducer": "reducer.py",     "output": "/user/data/results/daily",           "chart": "line",   "description": "Request volume by calendar day"},
-    {"id": "hour_day",    "name": "Day×Hour Heatmap",             "category": "Hosts & Volume",     "mapper": "hour_day_mapper.py",      "reducer": "reducer.py",     "output": "/user/data/results/hour_day",        "chart": "heatmap","description": "Day-of-week × hour-of-day traffic heatmap"},
+    {"id": "hosts",       "name": "Top Client IPs",              "category": "Hosts & Volume",     "mapper": "host_mapper.py",          "reducer": "reducer.py",     "output": "/user/data/results/hosts",              "chart": "bar",    "description": "Rank client IPs by request count"},
+    {"id": "endpoints",   "name": "Top Requested Paths",         "category": "Hosts & Volume",     "mapper": "endpoint_mapper.py",      "reducer": "reducer.py",     "output": "/user/data/results/endpoints",          "chart": "bar",    "description": "Most frequently requested URL paths"},
+    {"id": "extensions",  "name": "File Extension Distribution",  "category": "Hosts & Volume",     "mapper": "extension_mapper.py",     "reducer": "reducer.py",     "output": "/user/data/results/extensions",         "chart": "bar",    "description": "Distribution of requested file types"},
+    {"id": "methods",     "name": "HTTP Method Distribution",     "category": "Hosts & Volume",     "mapper": "method_mapper.py",        "reducer": "reducer.py",     "output": "/user/data/results/methods",            "chart": "pie",    "description": "Breakdown by HTTP method (GET, POST, HEAD, etc.)"},
+    {"id": "hourly",      "name": "Requests by Hour",             "category": "Hosts & Volume",     "mapper": "hour_mapper.py",          "reducer": "reducer.py",     "output": "/user/data/results/hourly",             "chart": "line",   "description": "Request volume by hour of day (0–23)"},
+    {"id": "daily",       "name": "Requests by Day",              "category": "Hosts & Volume",     "mapper": "day_mapper.py",           "reducer": "reducer.py",     "output": "/user/data/results/daily",              "chart": "line",   "description": "Request volume by calendar day"},
+    {"id": "hour_day",    "name": "Day×Hour Heatmap",             "category": "Hosts & Volume",     "mapper": "hour_day_mapper.py",      "reducer": "reducer.py",     "output": "/user/data/results/hour_day",           "chart": "heatmap","description": "Day-of-week × hour-of-day traffic heatmap"},
 
     # Category 2 — HTTP responses and errors
-    {"id": "status",      "name": "Status Code Distribution",     "category": "Responses & Errors", "mapper": "status_mapper.py",        "reducer": "reducer.py",     "output": "/user/data/results/status_counts",   "chart": "bar",    "description": "Distribution of all HTTP status codes"},
-    {"id": "status_4xx",  "name": "4xx Client Errors",            "category": "Responses & Errors", "mapper": "status4xx_mapper.py",     "reducer": "reducer.py",     "output": "/user/data/results/status_4xx",      "chart": "bar",    "description": "Breakdown of 4xx client error codes"},
-    {"id": "status_5xx",  "name": "5xx Server Errors",            "category": "Responses & Errors", "mapper": "status5xx_mapper.py",     "reducer": "reducer.py",     "output": "/user/data/results/status_5xx",      "chart": "bar",    "description": "Breakdown of 5xx server error codes"},
-    {"id": "error_paths", "name": "Error-Producing Paths",        "category": "Responses & Errors", "mapper": "error_path_mapper.py",    "reducer": "reducer.py",     "output": "/user/data/results/error_paths",     "chart": "bar",    "description": "URL paths that produced the most 4xx/5xx errors"},
-    {"id": "error_hosts", "name": "High-Error Clients",           "category": "Responses & Errors", "mapper": "error_host_mapper.py",    "reducer": "reducer.py",     "output": "/user/data/results/error_hosts",     "chart": "bar",    "description": "Client IPs with the highest 4xx/5xx error counts"},
-    {"id": "method_status","name": "Method × Status Cross-Tab",   "category": "Responses & Errors", "mapper": "method_status_mapper.py", "reducer": "method_status_reducer.py", "output": "/user/data/results/method_status",   "chart": "stacked","description": "HTTP method versus status code cross-tabulation"},
-    {"id": "error_rate_day","name": "Error Rate Over Time",       "category": "Responses & Errors", "mapper": "error_rate_day_mapper.py","reducer": "error_rate_day_reducer.py", "output": "/user/data/results/error_rate_day",  "chart": "line",   "description": "Daily error rates (total vs error requests by day)"},
+    {"id": "status",      "name": "Status Code Distribution",     "category": "Responses & Errors", "mapper": "status_mapper.py",        "reducer": "reducer.py",     "output": "/user/data/results/status",             "chart": "bar",    "description": "Distribution of all HTTP status codes"},
+    {"id": "status_4xx",  "name": "4xx Client Errors",            "category": "Responses & Errors", "mapper": "status4xx_mapper.py",     "reducer": "reducer.py",     "output": "/user/data/results/status_4xx",         "chart": "bar",    "description": "Breakdown of 4xx client error codes"},
+    {"id": "status_5xx",  "name": "5xx Server Errors",            "category": "Responses & Errors", "mapper": "status5xx_mapper.py",     "reducer": "reducer.py",     "output": "/user/data/results/status_5xx",         "chart": "bar",    "description": "Breakdown of 5xx server error codes"},
+    {"id": "error_paths", "name": "Error-Producing Paths",        "category": "Responses & Errors", "mapper": "error_path_mapper.py",    "reducer": "reducer.py",     "output": "/user/data/results/error_paths",        "chart": "bar",    "description": "URL paths that produced the most 4xx/5xx errors"},
+    {"id": "error_hosts", "name": "High-Error Clients",           "category": "Responses & Errors", "mapper": "error_host_mapper.py",    "reducer": "reducer.py",     "output": "/user/data/results/error_hosts",        "chart": "bar",    "description": "Client IPs with the highest 4xx/5xx error counts"},
+    {"id": "method_status","name": "Method × Status Cross-Tab",   "category": "Responses & Errors", "mapper": "method_status_mapper.py", "reducer": "method_status_reducer.py", "output": "/user/data/results/method_status",      "chart": "stacked","description": "HTTP method versus status code cross-tabulation"},
+    {"id": "error_rate_day","name": "Error Rate Over Time",       "category": "Responses & Errors", "mapper": "error_rate_day_mapper.py","reducer": "error_rate_day_reducer.py", "output": "/user/data/results/error_rate_day",     "chart": "line",   "description": "Daily error rates (total vs error requests by day)"},
 
     # Category 3 — Traffic characteristics
-    {"id": "bytes_dist",  "name": "Response Size Distribution",   "category": "Traffic",            "mapper": "bytes_mapper.py",         "reducer": "reducer.py",     "output": "/user/data/results/bytes_dist",      "chart": "histogram","description": "Histogram of response sizes by bucket"},
-    {"id": "bytes_path",  "name": "Bandwidth by Path",            "category": "Traffic",            "mapper": "bytes_total_mapper.py",   "reducer": "sum_reducer.py", "output": "/user/data/results/bytes_path",      "chart": "bar",    "description": "Total bytes transferred per URL path"},
-    {"id": "bytes_host",  "name": "Traffic Volume by Client",     "category": "Traffic",            "mapper": "host_bytes_mapper.py",    "reducer": "sum_reducer.py", "output": "/user/data/results/bytes_host",      "chart": "bar",    "description": "Total bytes transferred per client IP"},
+    {"id": "bytes_dist",  "name": "Response Size Distribution",   "category": "Traffic",            "mapper": "bytes_mapper.py",         "reducer": "reducer.py",     "output": "/user/data/results/bytes_dist",         "chart": "histogram","description": "Histogram of response sizes by bucket"},
+    {"id": "bytes_path",  "name": "Bandwidth by Path",            "category": "Traffic",            "mapper": "bytes_total_mapper.py",   "reducer": "sum_reducer.py", "output": "/user/data/results/bytes_path",         "chart": "bar",    "description": "Total bytes transferred per URL path"},
+    {"id": "bytes_host",  "name": "Traffic Volume by Client",     "category": "Traffic",            "mapper": "host_bytes_mapper.py",    "reducer": "sum_reducer.py", "output": "/user/data/results/bytes_host",         "chart": "bar",    "description": "Total bytes transferred per client IP"},
 
-    # Category 4 — Behavioral and security-oriented (unique output dirs)
-    {"id": "high_rate_hosts",  "name": "High-Rate Clients",        "category": "Security",          "mapper": "host_mapper.py",          "reducer": "reducer.py",     "output": "/user/data/results/high_rate_hosts",       "chart": "bar",    "description": "Clients with highest request counts (potential high-rate)"},
-    {"id": "failed_requests",  "name": "Repeated Failed Requests", "category": "Security",          "mapper": "error_host_mapper.py",    "reducer": "reducer.py",     "output": "/user/data/results/failed_requests",     "chart": "bar",    "description": "Clients with repeated 4xx/5xx responses (potential probing)"},
-    {"id": "unusual_paths",    "name": "Rare Paths",               "category": "Security",          "mapper": "endpoint_mapper.py",      "reducer": "reducer.py",     "output": "/user/data/results/unusual_paths",   "chart": "table",  "description": "Least common requested paths (statistical outliers)"},
-    {"id": "suspicious_combos","name": "Suspicious Method+Status", "category": "Security",          "mapper": "method_status_mapper.py", "reducer": "method_status_reducer.py", "output": "/user/data/results/suspicious_combos",   "chart": "table",  "description": "Unusual HTTP method and status combinations"},
-    {"id": "rare_status",      "name": "Rare Status Codes",        "category": "Security",          "mapper": "status_mapper.py",        "reducer": "reducer.py",     "output": "/user/data/results/rare_status",     "chart": "table",  "description": "Least-common HTTP status codes"},
+    # Category 4 — Behavioral and security-oriented
+    {"id": "high_rate_hosts",  "name": "High-Rate Clients",        "category": "Security",          "mapper": "host_mapper.py",          "reducer": "reducer.py",     "output": "/user/data/results/high_rate_hosts",    "chart": "bar",    "description": "Clients with highest request counts (potential high-rate)"},
+    {"id": "failed_requests",  "name": "Repeated Failed Requests", "category": "Security",          "mapper": "error_host_mapper.py",    "reducer": "reducer.py",     "output": "/user/data/results/failed_requests",    "chart": "bar",    "description": "Clients with repeated 4xx/5xx responses (potential probing)"},
+    {"id": "unusual_paths",    "name": "Rare Paths",               "category": "Security",          "mapper": "endpoint_mapper.py",      "reducer": "reducer.py",     "output": "/user/data/results/unusual_paths",      "chart": "table",  "description": "Least common requested paths (statistical outliers)"},
+    {"id": "suspicious_combos","name": "Suspicious Method+Status", "category": "Security",          "mapper": "method_status_mapper.py", "reducer": "method_status_reducer.py", "output": "/user/data/results/suspicious_combos",  "chart": "table",  "description": "Unusual HTTP method and status combinations"},
+    {"id": "rare_status",      "name": "Rare Status Codes",        "category": "Security",          "mapper": "status_mapper.py",        "reducer": "reducer.py",     "output": "/user/data/results/rare_status",        "chart": "table",  "description": "Least-common HTTP status codes"},
 
-    # Additional analyses (unique output dirs)
-    {"id": "volume_time",      "name": "Request Volume Over Time", "category": "Hosts & Volume",     "mapper": "day_mapper.py",          "reducer": "reducer.py",     "output": "/user/data/results/volume_time",     "chart": "area",   "description": "Request volume time series by day"},
+    # Additional analyses
+    {"id": "volume_time",      "name": "Request Volume Over Time", "category": "Hosts & Volume",     "mapper": "day_mapper.py",          "reducer": "reducer.py",     "output": "/user/data/results/volume_time",        "chart": "area",   "description": "Request volume time series by day"},
     {"id": "host_concentration","name": "Client Concentration",    "category": "Traffic",            "mapper": "host_mapper.py",          "reducer": "reducer.py",     "output": "/user/data/results/host_concentration", "chart": "pareto", "description": "Traffic share analysis — what fraction of clients produce what fraction of traffic"},
-    {"id": "path_popularity",  "name": "Path Popularity",          "category": "Traffic",            "mapper": "endpoint_mapper.py",      "reducer": "reducer.py",     "output": "/user/data/results/path_popularity", "chart": "treemap","description": "Resource popularity ranked view"},
-    {"id": "malformed",        "name": "Malformed Records",        "category": "Traffic",            "mapper": "malformed_mapper.py",     "reducer": "reducer.py",     "output": "/user/data/results/malformed",       "chart": "table",  "description": "Records that failed CLF parsing"},
+    {"id": "path_popularity",  "name": "Path Popularity",          "category": "Traffic",            "mapper": "endpoint_mapper.py",      "reducer": "reducer.py",     "output": "/user/data/results/path_popularity",    "chart": "treemap","description": "Resource popularity ranked view"},
+    {"id": "malformed",        "name": "Malformed Records",        "category": "Traffic",            "mapper": "malformed_mapper.py",     "reducer": "reducer.py",     "output": "/user/data/results/malformed",          "chart": "table",  "description": "Records that failed CLF parsing"},
 ]
 
 # Build lookup from id → task config
 _TASK_LOOKUP = {t["id"]: t for t in TASK_CATALOG}
+
+# Sanity-check: every output path must be unique
+assert len({t["output"] for t in TASK_CATALOG}) == len(TASK_CATALOG), "Duplicate output paths in TASK_CATALOG!"
 
 # Tasks that need ascending sort (rarest first)
 _ASCENDING_SORT_TASKS = {"rare_status", "unusual_paths"}
@@ -70,8 +74,8 @@ _MULTI_COL_TASKS = {"method_status", "suspicious_combos"}
 _ERROR_RATE_TASKS = {"error_rate_day"}
 
 
-# Maximum bytes to read from HDFS result output (10 MB)
-_MAX_RESULT_BYTES = 10 * 1024 * 1024
+# Maximum bytes to read from HDFS result output (5 MB)
+_MAX_RESULT_BYTES = 5 * 1024 * 1024
 
 # Lines that are Hadoop diagnostic noise — not actual result rows
 _NOISE_PREFIXES = (
@@ -339,6 +343,36 @@ def _parse_date_key(key):
     return (9999, 99, 99)  # sort unknowns last
 
 
+def _read_hdfs_output(output_path, max_bytes=_MAX_RESULT_BYTES, timeout=60):
+    """Stream-read HDFS result files via Popen, capped at *max_bytes*.
+
+    Uses ``hdfs dfs -cat … | head -c …`` so the NameNode only sends the
+    first *max_bytes* of data before the pipe closes.  This prevents both
+    memory exhaustion and the blocking reads that cause timeouts on large
+    result sets.
+    """
+    cmd = [
+        "docker", "exec", "namenode", "bash", "-c",
+        f"hdfs dfs -cat {output_path}/part-* 2>/dev/null | head -c {max_bytes}",
+    ]
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        stdout_bytes, stderr_bytes = proc.communicate(timeout=timeout)
+        stdout = stdout_bytes.decode('utf-8', errors='replace')
+        if proc.returncode != 0 and not stdout.strip():
+            err = stderr_bytes.decode('utf-8', errors='replace')
+            return {"status": "error", "output": err or "Command failed"}
+        return {"status": "success", "output": stdout}
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        return {"status": "error", "output": "Command timed out"}
+    except Exception as e:
+        return {"status": "error", "output": str(e)}
+
+
 def get_mapreduce_results(task="status"):
     task_config = _TASK_LOOKUP.get(task)
     if not task_config:
@@ -346,15 +380,8 @@ def get_mapreduce_results(task="status"):
 
     output_path = task_config["output"]
 
-    # Use a generous timeout (60s) to handle large result files across
-    # the Docker+HDFS stack without false "Command timed out" errors.
-    # Redirect stderr to /dev/null so Hadoop diagnostic messages don't
-    # contaminate the result stream.
-    res = _run_docker_exec(
-        "namenode",
-        ["bash", "-c", f"hdfs dfs -cat {output_path}/part-* 2>/dev/null"],
-        timeout=60,
-    )
+    # Stream-read HDFS results capped at _MAX_RESULT_BYTES.
+    res = _read_hdfs_output(output_path)
 
     if res["status"] == "error":
         return {"available": False, "task": task, "results": {}, "rows": [],
@@ -363,13 +390,10 @@ def get_mapreduce_results(task="status"):
 
     raw_output = res["output"]
 
-    # Guard against gigantic outputs: truncate to _MAX_RESULT_BYTES
-    if len(raw_output) > _MAX_RESULT_BYTES:
-        # Truncate to last complete line within the limit
-        raw_output = raw_output[:_MAX_RESULT_BYTES]
-        last_nl = raw_output.rfind('\n')
-        if last_nl > 0:
-            raw_output = raw_output[:last_nl]
+    # Truncate to last complete line (head -c may cut a line in half)
+    last_nl = raw_output.rfind('\n')
+    if last_nl > 0:
+        raw_output = raw_output[:last_nl]
 
     # Strip Hadoop diagnostic noise lines before parsing
     clean_lines = [line for line in raw_output.split('\n') if not _is_noise_line(line)]
