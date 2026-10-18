@@ -5,13 +5,26 @@ MapReduce 25-task catalog, job submission, and result parsing.
 """
 
 import os
+import json
+import logging
 import subprocess
 import re
 import time
+import urllib.request
+from api.mapreduce_status import parse_yarn_application_status
+
+mapreduce_logger = logging.getLogger("clarknet.mapreduce")
+
+
+def _decode_output(value):
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
 
 _HDFS_STATUS_CACHE = {"data": None, "ts": 0}
 _HDFS_REPORT_CACHE = {"data": None, "ts": 0}
 _HDFS_FSCK_CACHE = {"data": None, "ts": 0}
+_YARN_STATUS_LAST_FAILURE = {}
 
 # ── 25-Task Analytical Catalog ───────────────────────────────────
 # Every task has output = /user/data/results/<task_id>.  The path is the
@@ -111,19 +124,40 @@ def _run_docker_exec(container, cmd, timeout=10):
     try:
         result = subprocess.run(
             ["docker", "exec", container] + cmd,
-            capture_output=True, text=False, check=True, timeout=timeout,
+            capture_output=True, text=False, check=False, timeout=timeout,
         )
-        # Decode as UTF-8 with replacement to handle non-UTF-8 bytes
-        stdout = result.stdout.decode('utf-8', errors='replace')
-        return {"status": "success", "output": stdout}
-    except subprocess.TimeoutExpired:
-        return {"status": "error", "output": "Command timed out"}
-    except subprocess.CalledProcessError as e:
-        stderr_text = (e.stderr or b'').decode('utf-8', errors='replace') if isinstance(e.stderr, bytes) else (e.stderr or '')
-        stdout_text = (e.stdout or b'').decode('utf-8', errors='replace') if isinstance(e.stdout, bytes) else (e.stdout or '')
-        return {"status": "error", "output": stderr_text or stdout_text or "Command failed"}
+        stdout = _decode_output(result.stdout)
+        stderr = _decode_output(result.stderr)
+        return {
+            "status": "success" if result.returncode == 0 else "error",
+            "output": stderr or stdout,
+            "stdout": stdout,
+            "stderr": stderr,
+            "returncode": result.returncode,
+            "error_kind": None if result.returncode == 0 else "command_failed",
+        }
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        return {
+            "status": "error", "output": stderr or stdout or "Command timed out",
+            "stdout": stdout, "stderr": stderr, "returncode": None,
+            "error_kind": "timeout",
+        }
+    except OSError as exc:
+        return {
+            "status": "error", "output": str(exc), "stdout": "", "stderr": str(exc),
+            "returncode": None, "error_kind": "docker_unavailable",
+        }
     except Exception as e:
-        return {"status": "error", "output": str(e)}
+        return {
+            "status": "error", "output": str(e), "stdout": "", "stderr": str(e),
+            "returncode": None, "error_kind": "unexpected_error",
+        }
 
 
 def _base_dir():
@@ -136,47 +170,271 @@ def _raw_file():
 
 # ── HDFS Dataset ─────────────────────────────────────────────────
 
-def ensure_hdfs_dataset():
+def ensure_hdfs_dataset(job_id="-", task_id="-"):
     raw_file = _raw_file()
     if not os.path.exists(raw_file):
-        return {"available": False, "uploaded": False, "message": "local ClarkNet access_log missing"}
+        return {
+            "available": False, "uploaded": False, "exists": None,
+            "error_kind": "local_dataset_missing", "message": "local ClarkNet access_log missing",
+        }
 
-    # Check if dataset is already in HDFS to avoid expensive re-upload
-    check = _run_docker_exec("namenode", ["hdfs", "dfs", "-test", "-e", "/user/data/raw_logs/access_log"], timeout=5)
+    # Check if dataset is already in HDFS to avoid expensive re-upload. Starting
+    # a fresh Hadoop CLI/JVM can take several seconds after cluster startup, so
+    # do not confuse a slow existence check with a missing dataset.
+    check = _run_docker_exec(
+        "namenode",
+        ["hdfs", "dfs", "-test", "-e", "/user/data/raw_logs/access_log"],
+        timeout=30,
+    )
     if check["status"] == "success":
+        mapreduce_logger.info(
+            "event=hdfs.input.validated path=/user/data/raw_logs/access_log result=present",
+            extra={"component": "hdfs", "job_id": job_id, "task_id": task_id},
+        )
         return {
             "available": True,
             "uploaded": True,
+            "exists": True,
+            "error_kind": None,
             "message": "Dataset present in HDFS",
             "path": "/user/data/raw_logs/access_log",
         }
 
-    # Upload if missing
-    subprocess.run(["docker", "cp", raw_file, "namenode:/tmp/access_log"], check=False)
+    # Hadoop's -test returns 1 with no output for a missing path. Any diagnostic
+    # output, Docker failure, or timeout means existence is uncertain: never upload.
+    confirmed_missing = (
+        check.get("error_kind") == "command_failed"
+        and check.get("returncode") == 1
+        and not check.get("stdout", "").strip()
+        and not check.get("stderr", "").strip()
+    )
+    if not confirmed_missing:
+        detail = check.get("stderr") or check.get("stdout") or check.get("output")
+        mapreduce_logger.error(
+            "event=hdfs.input.validation_failed error_kind=%s exit_code=%s detail=%r; refusing upload because path existence is unknown",
+            check.get("error_kind"), check.get("returncode"), detail,
+            extra={"component": "hdfs", "job_id": job_id, "task_id": task_id},
+        )
+        return {
+            "available": False, "uploaded": False, "exists": None,
+            "error_kind": check.get("error_kind") or "validation_failed",
+            "message": detail or "HDFS input validation failed; refusing to modify the dataset",
+            "path": "/user/data/raw_logs/access_log",
+        }
+
+    mapreduce_logger.warning(
+        "event=hdfs.input.missing path=/user/data/raw_logs/access_log; attempting safe non-overwrite upload",
+        extra={"component": "hdfs", "job_id": job_id, "task_id": task_id},
+    )
+    try:
+        copy_result = subprocess.run(
+            ["docker", "cp", raw_file, "namenode:/tmp/access_log"],
+            check=False, capture_output=True, text=True, timeout=30,
+        )
+        if copy_result.returncode:
+            detail = copy_result.stderr or copy_result.stdout or "no output"
+            mapreduce_logger.error(
+                "event=hdfs.input.copy_failed exit_code=%s detail=%r",
+                copy_result.returncode, detail[-2000:],
+                extra={"component": "hdfs", "job_id": job_id, "task_id": task_id},
+            )
+            return {
+                "available": False, "uploaded": False, "exists": False,
+                "error_kind": "docker_copy_failed", "message": detail,
+                "path": "/user/data/raw_logs/access_log",
+            }
+    except subprocess.TimeoutExpired:
+        mapreduce_logger.exception(
+            "event=hdfs.input.copy_timeout timeout_seconds=30",
+            extra={"component": "hdfs", "job_id": job_id, "task_id": task_id},
+        )
+        return {
+            "available": False, "uploaded": False, "exists": False,
+            "error_kind": "docker_copy_timeout", "message": "docker cp timed out",
+            "path": "/user/data/raw_logs/access_log",
+        }
+    except OSError as exc:
+        mapreduce_logger.exception(
+            "event=hdfs.input.copy_unavailable",
+            extra={"component": "hdfs", "job_id": job_id, "task_id": task_id},
+        )
+        return {
+            "available": False, "uploaded": False, "exists": False,
+            "error_kind": "docker_unavailable", "message": str(exc),
+            "path": "/user/data/raw_logs/access_log",
+        }
     res = _run_docker_exec("namenode", [
         "bash", "-c",
         "hdfs dfs -mkdir -p /user/data/raw_logs && "
-        "hdfs dfs -put -f /tmp/access_log /user/data/raw_logs/access_log && "
-        "hdfs dfs -ls /user/data/raw_logs/access_log"
+        "hdfs dfs -put /tmp/access_log /user/data/raw_logs/access_log && "
+        "hdfs dfs -test -e /user/data/raw_logs/access_log"
     ], timeout=90)
+    if res["status"] == "success":
+        mapreduce_logger.info(
+            "event=hdfs.input.uploaded path=/user/data/raw_logs/access_log",
+            extra={"component": "hdfs", "job_id": job_id, "task_id": task_id},
+        )
+    else:
+        mapreduce_logger.error(
+            "event=hdfs.input.upload_failed error_kind=%s exit_code=%s detail=%r",
+            res.get("error_kind"), res.get("returncode"), res.get("stderr") or res.get("output"),
+            extra={"component": "hdfs", "job_id": job_id, "task_id": task_id},
+        )
     return {
         "available": res["status"] == "success",
         "uploaded": res["status"] == "success",
+        "exists": res["status"] == "success",
+        "error_kind": None if res["status"] == "success" else res.get("error_kind"),
         "message": res["output"],
         "path": "/user/data/raw_logs/access_log",
     }
 
 
+def get_yarn_application_status(application_id, job_id="-", task_id="-", timeout=15):
+    """Query ResourceManager; prefer fast REST API on port 8088 with fallback to CLI."""
+    if not application_id:
+        return {"available": False, "status": "unknown", "error": "application ID not known"}
+
+    # Fast path: query YARN REST API directly (<5ms, zero JVM overhead)
+    try:
+        url = f"http://127.0.0.1:8088/ws/v1/cluster/apps/{application_id}"
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                app = data.get("app")
+                if app:
+                    state = str(app.get("state", "")).upper()
+                    final_state = str(app.get("finalStatus", "")).upper()
+                    normalized = {
+                        "NEW": "submitted",
+                        "NEW_SAVING": "submitted",
+                        "SUBMITTED": "submitted",
+                        "ACCEPTED": "accepted",
+                        "RUNNING": "running",
+                    }.get(state)
+                    if state == "FINISHED":
+                        normalized = {
+                            "SUCCEEDED": "succeeded",
+                            "FAILED": "failed",
+                            "KILLED": "killed",
+                        }.get(final_state, "unknown")
+                    elif state == "FAILED":
+                        normalized = "failed"
+                    elif state == "KILLED":
+                        normalized = "killed"
+                    _YARN_STATUS_LAST_FAILURE.pop(application_id, None)
+                    return {
+                        "available": normalized != "unknown",
+                        "status": normalized or "unknown",
+                        "state": state or "UNKNOWN",
+                        "final_state": final_state or "UNDEFINED",
+                        "diagnostics": app.get("diagnostics", ""),
+                        "tracking_url": app.get("trackingUrl", ""),
+                        "start_time": str(app.get("startedTime", "")),
+                        "finish_time": str(app.get("finishedTime", "")),
+                        "application_id": application_id,
+                        "progress": app.get("progress", 0),
+                    }
+    except Exception:
+        pass
+
+    # Fallback to CLI if REST endpoint is unreachable
+    result = _run_docker_exec(
+        "namenode", ["yarn", "application", "-status", application_id], timeout=timeout
+    )
+    if result["status"] != "success":
+        detail = result.get("stderr") or result.get("output") or "no diagnostic output"
+        signature = (result.get("error_kind"), result.get("returncode"), detail[-1000:])
+        if _YARN_STATUS_LAST_FAILURE.get(application_id) != signature:
+            mapreduce_logger.warning(
+                "event=yarn.status.unavailable application_id=%s error_kind=%s exit_code=%s detail=%r",
+                application_id, result.get("error_kind"), result.get("returncode"), detail[-2000:],
+                extra={"component": "yarn", "job_id": job_id, "task_id": task_id},
+            )
+            _YARN_STATUS_LAST_FAILURE[application_id] = signature
+        return {
+            "available": False, "status": "unknown", "application_id": application_id,
+            "error": detail, "error_kind": result.get("error_kind"),
+            "exit_code": result.get("returncode"),
+        }
+    parsed = parse_yarn_application_status(result["stdout"])
+    parsed["available"] = parsed["status"] != "unknown"
+    parsed["application_id"] = application_id
+    _YARN_STATUS_LAST_FAILURE.pop(application_id, None)
+    if not parsed["available"]:
+        parsed["error"] = "ResourceManager returned no recognized application state"
+        mapreduce_logger.warning(
+            "event=yarn.status.unrecognized application_id=%s detail=%r",
+            application_id, result["stdout"][-2000:],
+            extra={"component": "yarn", "job_id": job_id, "task_id": task_id},
+        )
+    else:
+        mapreduce_logger.debug(
+            "event=yarn.status application_id=%s state=%s final_state=%s",
+            application_id, parsed["state"], parsed["final_state"],
+            extra={"component": "yarn", "job_id": job_id, "task_id": task_id},
+        )
+    return parsed
+
+
 # ── HDFS Status ──────────────────────────────────────────────────
 
-def get_hdfs_status(timeout=10):
+def _check_namenode_http_healthy():
+    """Fast check whether NameNode HTTP UI/RPC is healthy (port 9870)."""
+    try:
+        url = "http://127.0.0.1:9870/jmx?qry=Hadoop:service=NameNode,name=NameNodeStatus"
+        with urllib.request.urlopen(url, timeout=2) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                beans = data.get("beans", [])
+                if beans and beans[0].get("State") in ("active", "standby"):
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def _check_dataset_ready_http():
+    """Fast check via WebHDFS if the ClarkNet access_log exists."""
+    try:
+        url = "http://127.0.0.1:9870/webhdfs/v1/user/data/raw_logs/access_log?op=GETFILESTATUS"
+        with urllib.request.urlopen(url, timeout=2) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                return bool(data.get("FileStatus"))
+    except Exception:
+        pass
+    return None
+
+
+def get_hdfs_status(timeout=15):
     global _HDFS_STATUS_CACHE
     now = time.time()
     if _HDFS_STATUS_CACHE["data"] and (now - _HDFS_STATUS_CACHE["ts"]) < 8:
         return _HDFS_STATUS_CACHE["data"]
 
+    http_healthy = _check_namenode_http_healthy()
+    http_dataset = _check_dataset_ready_http()
+
     res = _run_docker_exec("namenode", ["hdfs", "dfs", "-ls", "-R", "/user/data"], timeout=timeout)
     if res["status"] == "error":
+        # If we have cached data or HTTP indicates NameNode is alive, do NOT declare HDFS dead!
+        if _HDFS_STATUS_CACHE["data"]:
+            cached = dict(_HDFS_STATUS_CACHE["data"])
+            cached["stale"] = True
+            if http_dataset is not None:
+                cached["dataset_ready"] = http_dataset
+            if http_healthy:
+                cached["available"] = True
+            return cached
+        if http_healthy:
+            return {
+                "available": True,
+                "message": "NameNode active",
+                "files": [],
+                "dataset_ready": http_dataset if http_dataset is not None else True,
+            }
         return {"available": False, "message": "HDFS unavailable", "files": [], "dataset_ready": False}
 
     files = []
@@ -195,7 +453,7 @@ def get_hdfs_status(timeout=10):
                 "path": parts[7],
                 "is_dir": parts[0].startswith("d"),
             })
-    dataset_ready = any(f["path"] == "/user/data/raw_logs/access_log" for f in files)
+    dataset_ready = (http_dataset is True) or any(f["path"] == "/user/data/raw_logs/access_log" for f in files)
     result = {"available": True, "files": files, "dataset_ready": dataset_ready}
     _HDFS_STATUS_CACHE["data"] = result
     _HDFS_STATUS_CACHE["ts"] = now

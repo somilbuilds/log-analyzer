@@ -75,6 +75,35 @@ function TopBar({ health }) {
 function AppShell() {
   const [health, setHealth] = useState(null)
 
+  // Forward every user click to the API so it appears in the attached terminal
+  // log stream (and logs/api.log), including clicks that don't trigger requests.
+  useEffect(() => {
+    const logClick = (event) => {
+      const target = event.target instanceof Element ? event.target : null
+      const element = target?.closest('button, a, [role="button"], input, select, textarea') || target
+      if (!element) return
+      const label = element.getAttribute('aria-label') || element.getAttribute('title') ||
+        (element.matches('input, select, textarea') ? element.tagName.toLowerCase() :
+          element.matches('button, a, [role="button"]') ? element.textContent : '')
+      fetch(`${API_BASE}/debug/click`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          route: window.location.pathname,
+          tag: element.tagName,
+          label: (label || '').trim().replace(/\s+/g, ' ').slice(0, 160),
+          id: element.id,
+          className: typeof element.className === 'string' ? element.className : '',
+          x: event.clientX,
+          y: event.clientY,
+        }),
+        keepalive: true,
+      }).catch((error) => console.warn('[debug] click log failed', error))
+    }
+    document.addEventListener('click', logClick, true)
+    return () => document.removeEventListener('click', logClick, true)
+  }, [])
+
   useEffect(() => {
     const check = async () => {
       try {

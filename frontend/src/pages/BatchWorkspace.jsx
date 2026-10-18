@@ -29,22 +29,103 @@ function CustomTooltip({ active, payload, label }) {
   )
 }
 
-function ResultChart({ data, chartType, taskId, taskConfig, isRunning }) {
-  if (isRunning) {
-    return (
-      <div className="state-message" style={{ padding: 'var(--sp-6)' }}>
-        <div className="spinner" style={{ width: 36, height: 36, borderWidth: 3 }} />
-        <div className="state-title" style={{ color: 'var(--accent-teal)', marginTop: 'var(--sp-2)' }}>
+function MapReduceProgressMonitor({ mrStatus, taskConfig, taskId }) {
+  const mapPct = Math.min(100, Math.max(0, mrStatus?.map_progress ?? 0))
+  const reducePct = Math.min(100, Math.max(0, mrStatus?.reduce_progress ?? 0))
+  const phase = mrStatus?.phase || 'running'
+
+  const phaseLabel = {
+    validating_input: 'Checking & Validating HDFS Input Dataset',
+    staging: 'Preparing Isolated HDFS Staging Directory',
+    submitting: 'Submitting Hadoop Streaming Job to YARN',
+    running: 'Application Accepted — Allocating Containers',
+    mapping: `Map Phase in Progress (${mapPct}%)`,
+    reducing: `Reduce Phase in Progress (${reducePct}%)`,
+    publishing: 'Validating & Publishing Staged Results to Final Path',
+    completed: 'MapReduce Job Succeeded',
+  }[phase] || (mapPct < 100 ? `Map Phase (${mapPct}%)` : reducePct < 100 ? `Reduce Phase (${reducePct}%)` : 'Processing…')
+
+  return (
+    <div className="state-message" style={{ padding: 'var(--sp-6)', maxWidth: 580, margin: '0 auto' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', marginBottom: 'var(--sp-1)' }}>
+        <div className="spinner" style={{ width: 28, height: 28, borderWidth: 3 }} />
+        <div className="state-title" style={{ color: 'var(--accent-teal)', margin: 0, fontSize: 'var(--text-lg)' }}>
           MapReduce Execution In Progress
         </div>
-        <div className="state-desc" style={{ maxWidth: 440 }}>
-          Processing <strong>3,328,632 records</strong> in HDFS (<code>/user/data/raw_logs/access_log</code>) across Hadoop cluster.
+      </div>
+
+      <div style={{ fontSize: 13, color: 'var(--text-primary)', fontWeight: 600, margin: 'var(--sp-2) 0 4px 0' }}>
+        {phaseLabel}
+      </div>
+
+      <div className="state-desc" style={{ maxWidth: 480, margin: '0 0 var(--sp-4) 0', fontSize: 12 }}>
+        Processing <strong>3,328,632 records</strong> in HDFS (<code>/user/data/raw_logs/access_log</code>) for <strong>{taskConfig?.name || taskId}</strong>.
+      </div>
+
+      {/* Live Map & Reduce Progress Bars */}
+      <div style={{ width: '100%', background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: 'var(--sp-4)', textAlign: 'left' }}>
+        {/* Map Progress (0 to 100%) */}
+        <div style={{ marginBottom: 'var(--sp-3)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, fontSize: 12 }}>
+            <span style={{ fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className={`status-indicator ${mapPct >= 100 ? 'online' : mapPct > 0 ? 'running' : 'idle'}`} />
+              Map Phase
+            </span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: mapPct >= 100 ? 'var(--color-success)' : 'var(--accent-teal)' }}>
+              {mapPct}%
+            </span>
+          </div>
+          <div className="progress-bar" style={{ height: 8, background: 'var(--bg-input)' }}>
+            <div
+              className={`progress-fill ${mapPct < 100 && mapPct > 0 ? 'pulse' : ''}`}
+              style={{
+                width: `${mapPct}%`,
+                background: mapPct >= 100 ? 'var(--color-success)' : 'var(--accent-teal)',
+                transition: 'width 0.4s ease-in-out',
+              }}
+            />
+          </div>
         </div>
-        <div style={{ marginTop: 'var(--sp-2)', fontSize: 11, color: 'var(--text-muted)' }}>
-          Task: <code>{taskConfig?.name || taskId}</code> · Mapper: <code>{taskConfig?.mapper || taskId + '_mapper.py'}</code>
+
+        {/* Reduce Progress (0 to 100%) */}
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, fontSize: 12 }}>
+            <span style={{ fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className={`status-indicator ${reducePct >= 100 ? 'online' : reducePct > 0 ? 'running' : 'idle'}`} />
+              Reduce Phase
+            </span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: reducePct >= 100 ? 'var(--color-success)' : 'var(--accent-blue)' }}>
+              {reducePct}%
+            </span>
+          </div>
+          <div className="progress-bar" style={{ height: 8, background: 'var(--bg-input)' }}>
+            <div
+              className={`progress-fill ${reducePct < 100 && reducePct > 0 ? 'pulse' : ''}`}
+              style={{
+                width: `${reducePct}%`,
+                background: reducePct >= 100 ? 'var(--color-success)' : 'var(--accent-blue)',
+                transition: 'width 0.4s ease-in-out',
+              }}
+            />
+          </div>
+        </div>
+
+        {/* Job metadata footer */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 'var(--sp-3)', paddingTop: 'var(--sp-2)', borderTop: '1px solid var(--border-color)', fontSize: 11, color: 'var(--text-muted)' }}>
+          <span>Mapper: <code>{taskConfig?.mapper || taskId + '_mapper.py'}</code></span>
+          <span>Reducer: <code>{taskConfig?.reducer || 'reducer.py'}</code></span>
+          {mrStatus?.application_id && (
+            <span style={{ fontFamily: 'var(--font-mono)' }}>{mrStatus.application_id}</span>
+          )}
         </div>
       </div>
-    )
+    </div>
+  )
+}
+
+function ResultChart({ data, chartType, taskId, taskConfig, isRunning, mrStatus }) {
+  if (isRunning) {
+    return <MapReduceProgressMonitor mrStatus={mrStatus} taskConfig={taskConfig} taskId={taskId} />
   }
 
   if (!data || data.length === 0) {
@@ -441,7 +522,7 @@ function generateFindings(results, taskConfig) {
 
 export default function BatchWorkspace() {
   const { data: catalog } = usePolling('/mapreduce/catalog', 60000)
-  const { data: mrStatus, refetch: refetchStatus } = usePolling('/mapreduce/status', 3000)
+  const { data: mrStatus, refetch: refetchStatus } = usePolling('/mapreduce/status', 1500)
   const { data: hdfsReport } = usePolling('/hdfs/report', 15000)
   const { data: fsck } = usePolling('/hdfs/fsck', 15000)
 
@@ -547,25 +628,36 @@ export default function BatchWorkspace() {
     if (mrStatus.running) {
       // Mark this task as running (in case it was started outside this session)
       setTaskRunState(prev => ({ ...prev, [jobTask]: 'running' }))
+      if (mrStatus.status_query_error) {
+        setRunError(`ResourceManager status is temporarily unavailable${mrStatus.status_stale ? '; showing the last known YARN state' : ''}. The job is not being marked successful.`)
+      }
     } else if (mrStatus.status === 'completed' || mrStatus.success === true) {
       setTaskRunState(prev => {
-        if (prev[jobTask] === 'running') {
+        if (prev[jobTask] === 'running' || prev[jobTask] === 'unknown') {
           // Job just finished successfully — auto-load results for this task
           loadResults(jobTask)
           return { ...prev, [jobTask]: 'completed' }
         }
         return prev
       })
-    } else if (mrStatus.status === 'failed' || mrStatus.success === false) {
+    } else if (mrStatus.status === 'failed' || mrStatus.status === 'killed' || mrStatus.success === false) {
       setTaskRunState(prev => {
-        if (prev[jobTask] === 'running') {
-          setRunError(`MapReduce job failed (exit code ${mrStatus.code || '?'}). Check logs/mapreduce.log for details.`)
+        if (prev[jobTask] === 'running' || prev[jobTask] === 'unknown') {
+          setRunError(`MapReduce job ${mrStatus.status} (exit code ${mrStatus.code ?? '?'}). Check the per-job log and logs/mapreduce.log for details.`)
           return { ...prev, [jobTask]: 'failed' }
         }
         return prev
       })
+    } else if (mrStatus.status === 'unknown') {
+      setTaskRunState(prev => {
+        if (prev[jobTask] === 'running') {
+          setRunError(`YARN state is unknown${mrStatus.status_query_error ? `: ${mrStatus.status_query_error}` : ''}. Results were not marked successful; check the ResourceManager and per-job log.`)
+          return { ...prev, [jobTask]: 'unknown' }
+        }
+        return prev
+      })
     }
-  }, [mrStatus?.running, mrStatus?.status, mrStatus?.task, loadResults])
+  }, [mrStatus?.running, mrStatus?.status, mrStatus?.task, mrStatus?.status_query_error, mrStatus?.status_stale, mrStatus?.code, loadResults])
 
   const handleSelectTask = useCallback((taskId) => {
     setSelectedTask(taskId)
@@ -649,7 +741,7 @@ export default function BatchWorkspace() {
     if (config?.id === 'error_rate_day' && data.some(r => r.error_pct !== undefined)) {
       return <ErrorRateChart data={data} />
     }
-    return <ResultChart data={data} chartType={config?.chart || 'bar'} taskId={taskId} taskConfig={config} />
+    return <ResultChart data={data} chartType={config?.chart || 'bar'} taskId={taskId} taskConfig={config} isRunning={isRunning} mrStatus={mrStatus} />
   }
 
   return (
@@ -755,18 +847,7 @@ export default function BatchWorkspace() {
 
           <div className="panel-body" style={{ padding: (!hasCachedOutput || !hasFetched || effectiveViewMode === 'table' || effectiveViewMode === 'findings') ? 0 : 'var(--sp-3)' }}>
             {isRunning ? (
-              <div className="state-message" style={{ padding: 'var(--sp-6)' }}>
-                <div className="spinner" style={{ width: 36, height: 36, borderWidth: 3 }} />
-                <div className="state-title" style={{ color: 'var(--accent-teal)', marginTop: 'var(--sp-2)' }}>
-                  MapReduce Execution In Progress…
-                </div>
-                <div className="state-desc" style={{ maxWidth: 440, margin: 'var(--sp-2) 0' }}>
-                  Executing <strong>{taskConfig?.name}</strong> on HDFS across 3 DataNodes (3,328,632 records).
-                </div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: 4 }}>
-                  Streaming Job · Mapper: {taskConfig?.mapper || selectedTask + '_mapper.py'} · Reducer: {taskConfig?.reducer || 'reducer.py'}
-                </div>
-              </div>
+              <MapReduceProgressMonitor mrStatus={mrStatus} taskConfig={taskConfig} taskId={selectedTask} />
             ) : resultsLoading ? (
               <div className="state-message">
                 <div className="spinner" />
@@ -1040,12 +1121,25 @@ export default function BatchWorkspace() {
                   </div>
                 )}
                 {isRunning && (
-                  <div style={{ marginTop: 'var(--sp-2)' }}>
-                    <div className="progress-bar">
-                      <div className="progress-fill pulse" style={{ width: '60%' }} />
+                  <div style={{ marginTop: 'var(--sp-2)', padding: 'var(--sp-2)', background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 3 }}>
+                      <span>Map</span>
+                      <strong style={{ color: 'var(--accent-teal)' }}>{Math.min(100, Math.max(0, mrStatus?.map_progress ?? 0))}%</strong>
                     </div>
-                    <div style={{ color: 'var(--text-muted)', marginTop: 'var(--sp-1)', textAlign: 'center' }}>
-                      MapReduce executing…
+                    <div className="progress-bar" style={{ height: 5, marginBottom: 6 }}>
+                      <div className="progress-fill" style={{ width: `${Math.min(100, Math.max(0, mrStatus?.map_progress ?? 0))}%` }} />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 3 }}>
+                      <span>Reduce</span>
+                      <strong style={{ color: 'var(--accent-blue)' }}>{Math.min(100, Math.max(0, mrStatus?.reduce_progress ?? 0))}%</strong>
+                    </div>
+                    <div className="progress-bar" style={{ height: 5, marginBottom: 4 }}>
+                      <div className="progress-fill blue" style={{ width: `${Math.min(100, Math.max(0, mrStatus?.reduce_progress ?? 0))}%` }} />
+                    </div>
+                    <div style={{ color: 'var(--text-muted)', fontSize: 10, textAlign: 'center', marginTop: 4 }}>
+                      {mrStatus?.phase === 'publishing' ? 'Publishing to HDFS…' :
+                       (mrStatus?.map_progress ?? 0) < 100 ? 'Mapping splits…' :
+                       (mrStatus?.reduce_progress ?? 0) < 100 ? 'Reducing partitions…' : 'Finalizing…'}
                     </div>
                   </div>
                 )}

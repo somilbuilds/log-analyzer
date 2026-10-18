@@ -65,6 +65,8 @@ cleanup() {
 
     kill_pid_file "ui"
     kill_pid_file "api"
+    kill_pid_file "tunnel"
+    rm -f "$PID_DIR/tunnel.url"
 
     echo "Local application stopped."
 
@@ -133,6 +135,51 @@ else
 fi
 
 # ------------------------------------------------------------
+# YARN ResourceManager — wait until it accepts HTTP connections
+# Jobs submitted before YARN is ready fail with:
+#   java.net.ConnectException: Connection refused (resourcemanager:8032)
+#   java.net.UnknownHostException: Invalid host name: local host is: (unknown)
+# ------------------------------------------------------------
+
+echo "[2b/6] Waiting for YARN ResourceManager (up to 120s)..."
+YARN_READY=false
+for i in $(seq 1 120); do
+    if curl -sf http://127.0.0.1:8088/ws/v1/cluster/info > /dev/null 2>&1; then
+        YARN_READY=true
+        echo "  ✓ YARN ResourceManager is ready (${i}s)."
+        break
+    fi
+    sleep 1
+done
+
+if ! $YARN_READY; then
+    echo "  WARNING: YARN ResourceManager not ready after 120s."
+    echo "           MapReduce jobs will fail until it recovers."
+    echo "           Check status with: docker compose ps"
+fi
+
+echo "[2c/6] Waiting for YARN NodeManager compute node (up to 60s)..."
+NM_READY=false
+for i in $(seq 1 60); do
+    ACTIVE_NODES=$(curl -sf http://127.0.0.1:8088/ws/v1/cluster/metrics 2>/dev/null | grep -o '"activeNodes":[0-9]*' | cut -d: -f2 || echo 0)
+    if [[ "${ACTIVE_NODES:-0}" -ge 1 ]]; then
+        NM_READY=true
+        echo "  ✓ YARN NodeManager registered ($ACTIVE_NODES compute node active)."
+        break
+    fi
+    # If nodemanager container stopped, ensure it is brought up
+    if ! docker ps --filter "name=nodemanager" --filter "status=running" -q 2>/dev/null | grep -q .; then
+        docker compose up -d nodemanager >/dev/null 2>&1 || true
+    fi
+    sleep 2
+done
+
+if ! $NM_READY; then
+    echo "  WARNING: No active YARN NodeManager detected after 60s."
+    echo "           MapReduce jobs will remain queued until NodeManager registers."
+fi
+
+# ------------------------------------------------------------
 # Ports
 # ------------------------------------------------------------
 
@@ -151,11 +198,11 @@ echo
 # Clear old logs
 # ------------------------------------------------------------
 
-: > "$LOG_DIR/api.log"
 : > "$LOG_DIR/frontend.log"
 : > "$LOG_DIR/replayer.log"
 : > "$LOG_DIR/stream.log"
-: > "$LOG_DIR/mapreduce.log"
+# api.log and MapReduce logs are append/rotated so a new start preserves the
+# previous session's diagnostics.
 
 # ------------------------------------------------------------
 # Virtualenv
@@ -181,7 +228,8 @@ setsid bash -c "
     exec python3 -m uvicorn api.main:app \
         --host 0.0.0.0 \
         --port $API_PORT \
-        --log-level info
+        --log-level info \
+        --no-access-log
 " >"$LOG_DIR/api.log" 2>&1 &
 
 API_PID=$!
@@ -290,6 +338,8 @@ echo "  $LOG_DIR/api.log"
 echo "  $LOG_DIR/frontend.log"
 echo "  $LOG_DIR/replayer.log"
 echo "  $LOG_DIR/stream.log"
+echo "  $LOG_DIR/mapreduce.log (concise job lifecycle)"
+echo "  $LOG_DIR/mapreduce-debug.log (driver and Hadoop diagnostics)"
 echo
 echo "Press Ctrl+C to stop EVERYTHING."
 echo
@@ -306,4 +356,5 @@ tail -F \
     "$LOG_DIR/api.log" \
     "$LOG_DIR/frontend.log" \
     "$LOG_DIR/replayer.log" \
-    "$LOG_DIR/stream.log"
+    "$LOG_DIR/stream.log" \
+    "$LOG_DIR/mapreduce.log"

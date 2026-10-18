@@ -37,6 +37,7 @@
 - [Dataset Specifications](#-dataset-specifications)
 - [Tech Stack & System Components](#-tech-stack--system-components)
 - [Getting Started](#-getting-started)
+- [Cloudflare Tunnel & Render Deployment](#-cloudflare-tunnel--render-deployment)
 - [API Reference](#-api-reference)
 - [Design System & UI Guidelines](#-design-system--ui-guidelines)
 - [License](#-license)
@@ -227,6 +228,61 @@ The platform uses the official **ClarkNet HTTP Access Log** from the Internet Tr
    * **API Documentation**: [http://localhost:8000/docs](http://localhost:8000/docs)
    * **HDFS NameNode**: [http://localhost:9870](http://localhost:9870)
    * **YARN ResourceManager**: [http://localhost:8088](http://localhost:8088)
+
+### Destructive HDFS recovery
+
+Use this only when HDFS metadata or blocks are unrecoverable and you have decided to discard the current HDFS contents. The reset permanently removes the HDFS namespace and every block from the NameNode and three DataNode volumes. This includes user data, prior MapReduce outputs, and persisted YARN application/recovery state in `/rmstate`. The local `data/raw/access_log` file is uploaded again, but other HDFS data and previous results are not restored. MongoDB, Hive PostgreSQL, and project files are not reset.
+
+The reset is never run by `start.sh` or automatically. First stop the running project with Ctrl+C or `./stop.sh`; the normal cleanup uses `docker compose down` without `-v` and preserves named volumes. Review the exact volume names and mountpoints printed by the script, then run:
+
+```bash
+bash scripts/reset_hdfs.sh
+```
+
+The script refuses to proceed if the Compose project or any HDFS volume mapping is ambiguous, if project containers still exist, or if the expected local input or volumes are absent. It lists the four volumes and requires typing `RESET HDFS STORAGE` before deleting exactly those volumes. After confirmation, it creates HDFS, waits for three DataNodes and safe mode to clear, verifies an HDFS write/read, uploads and checks `data/raw/access_log`, then starts ResourceManager and NodeManager and waits for health/registration. On success, run `./start.sh` to bring up the website and remaining services.
+
+Before confirming, export any HDFS data or MapReduce results you need and consider that already-submitted YARN application history and recovery state will be lost.
+
+---
+
+## ☁ Cloudflare Tunnel & Render Deployment
+
+The platform supports parallel Cloudflare Tunneling and automated Render frontend deployment **without interfering with your local development on `localhost:3000` / `localhost:8000`**.
+
+### Architectural Flow
+
+* **Local Machine / WSL**: Runs the full distributed cluster (Hadoop, YARN, Spark, MongoDB, and FastAPI backend).
+* **Cloudflare Tunnel (`cloudflared`)**: Creates a secure, public HTTPS tunnel directly to your local FastAPI backend without port-forwarding or public IP exposure.
+* **Render (Static Site)**: Hosts the production React dashboard frontend, fetching data from the Cloudflare Tunnel URL via `VITE_API_URL`.
+
+### One-Click Automated CI/CD Deploy
+
+1. Set up your Render credentials:
+   ```bash
+   cp .env.render.example .env.render
+   ```
+   Add your `RENDER_API_KEY` (from Account Settings) and `RENDER_SERVICE_ID` (from your service dashboard) into `.env.render`.
+
+2. Run the deployment script:
+   ```bash
+   ./scripts/deploy_render.sh
+   ```
+   The script automatically:
+   - Starts the Cloudflare Tunnel in the background.
+   - Extracts the public `https://*.trycloudflare.com` URL.
+   - Copies the URL to your clipboard (using `clip.exe`).
+   - Updates `VITE_API_URL` on your Render service via Render's REST API.
+   - Triggers an instant cache-cleared deployment on Render.
+
+### Manual Tunnel Control
+
+Manage the tunnel independently at any time:
+```bash
+./scripts/tunnel.sh start    # Starts the tunnel and copies URL to clipboard
+./scripts/tunnel.sh status   # Tests end-to-end connectivity through the tunnel
+./scripts/tunnel.sh url      # Prints the current active tunnel URL
+./scripts/tunnel.sh stop     # Stops the tunnel process
+```
 
 ---
 

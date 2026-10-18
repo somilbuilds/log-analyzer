@@ -4,6 +4,50 @@
 set -euo pipefail
 
 TASK="${1:-${TASK:-status}}"
+BDA_JOB_ID="${BDA_JOB_ID:-local-$$}"
+BDA_TASK_ID="$TASK"
+
+log() {
+    local level="$1"
+    local stage="$2"
+    shift 2
+    printf '%s %s component=mapreduce-shell job_id=%s task_id=%s stage=%s %s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$level" "$BDA_JOB_ID" "$BDA_TASK_ID" "$stage" "$*"
+}
+
+run_hdfs() {
+    local stage="$1"
+    shift
+    local output rc
+    if output="$("$@" 2>&1)"; then
+        rc=0
+        log INFO "$stage" "operation=$* result=ok detail=${output:-none}"
+    else
+        rc=$?
+        log ERROR "$stage" "operation=$* exit_code=$rc detail=${output:-no_error_output}"
+    fi
+    return "$rc"
+}
+
+# Return 0 for an existing path, 1 only for a confirmed missing path, and any
+# other HDFS exit code for an indeterminate/failed check.
+check_hdfs_path() {
+    local path="$1" errfile rc detail
+    errfile=$(mktemp)
+    if hdfs dfs -test -e "$path" >/dev/null 2>"$errfile"; then
+        rm -f "$errfile"
+        return 0
+    else
+        rc=$?
+    fi
+    detail=$(cat "$errfile")
+    rm -f "$errfile"
+    if [ "$rc" -eq 1 ] && [ -z "$detail" ]; then
+        return 1
+    fi
+    log ERROR hdfs_validation "operation=hdfs_dfs_test path=$path exit_code=$rc detail=${detail:-no_error_output}"
+    return "$rc"
+}
 
 # ── Task → Mapper/Reducer/Output mapping ─────────────────────────
 # Output paths are always /user/data/results/<task_id> so they match the
@@ -51,41 +95,89 @@ OUTPUT="${OUTPUTS[$TASK]:-}"
 TITLE="${TITLES[$TASK]:-}"
 
 if [ -z "$MAPPER" ]; then
-    echo "ERROR: unknown MapReduce task '$TASK'"
-    echo "Available tasks: ${!MAPPERS[*]}"
+    log ERROR validation "reason=unknown_task available_tasks=${!MAPPERS[*]}"
     exit 1
 fi
+
+SAFE_JOB_ID=$(printf '%s' "$BDA_JOB_ID" | tr -c 'A-Za-z0-9_.-' '_')
+STAGING="${OUTPUT}.__staging_${SAFE_JOB_ID}_$(date -u +%Y%m%dT%H%M%SZ)_$$"
+export BDA_JOB_ID BDA_TASK_ID
+
+cleanup_staging_on_exit() {
+    local rc=$?
+    if [ "$rc" -ne 0 ] && check_hdfs_path "$STAGING"; then
+        log WARNING output_staging_cleanup "path=$STAGING result=failed_job_cleanup"
+        run_hdfs output_staging_cleanup hdfs dfs -rm -r "$STAGING" || true
+    fi
+}
+trap cleanup_staging_on_exit EXIT
 
 echo "=== Hadoop Streaming MapReduce: $TITLE ==="
 export HADOOP_CLASSPATH=/opt/hadoop-3.2.1/share/hadoop/mapreduce/*:/opt/hadoop-3.2.1/share/hadoop/mapreduce/lib/*
+log INFO job.start "title=$TITLE output=$OUTPUT"
 
 echo "[1/4] Ensuring raw ClarkNet log exists in HDFS..."
-hdfs dfs -mkdir -p /user/data/raw_logs /user/data/results
-if ! hdfs dfs -test -e /user/data/raw_logs/access_log 2>/dev/null; then
+run_hdfs input_directories hdfs dfs -mkdir -p /user/data/raw_logs /user/data/results || exit $?
+if check_hdfs_path /user/data/raw_logs/access_log; then
+    log INFO input_validation "path=/user/data/raw_logs/access_log result=present"
+else
+    CHECK_RC=$?
+    if [ "$CHECK_RC" -ne 1 ]; then
+        log ERROR input_validation "path=/user/data/raw_logs/access_log result=unknown exit_code=$CHECK_RC action=refuse_to_modify_input"
+        exit "$CHECK_RC"
+    fi
+    log WARNING input_validation "path=/user/data/raw_logs/access_log result=confirmed_missing"
     if [ -f /tmp/access_log ]; then
-        hdfs dfs -put /tmp/access_log /user/data/raw_logs/access_log
+        run_hdfs input_upload hdfs dfs -put /tmp/access_log /user/data/raw_logs/access_log || exit $?
+        check_hdfs_path /user/data/raw_logs/access_log || {
+            CHECK_RC=$?
+            log ERROR input_upload "path=/user/data/raw_logs/access_log result=verification_failed exit_code=$CHECK_RC"
+            exit "$CHECK_RC"
+        }
     else
-        echo "ERROR: No raw log file found in HDFS or /tmp/access_log"
+        log ERROR input_validation "path=/user/data/raw_logs/access_log local_fallback=/tmp/access_log result=missing"
         exit 1
     fi
-else
-    echo "Raw log already present in HDFS."
 fi
 
-echo "[2/4] Cleaning old task output: $OUTPUT"
-hdfs dfs -rm -r -f "$OUTPUT"
+echo "[2/4] Preparing isolated staging output: $STAGING"
+if check_hdfs_path "$STAGING"; then
+    log ERROR output_staging "path=$STAGING result=already_exists action=refuse_to_overwrite"
+    exit 1
+else
+    CHECK_RC=$?
+    if [ "$CHECK_RC" -ne 1 ]; then
+        log ERROR output_staging "path=$STAGING result=existence_unknown exit_code=$CHECK_RC action=refuse_to_submit"
+        exit "$CHECK_RC"
+    fi
+fi
+log INFO output_staging "path=$STAGING result=ready"
 
-STREAMING_JAR=$(find /opt/hadoop*/share/hadoop/tools/lib/ -name "hadoop-streaming-*.jar" 2>/dev/null | head -1)
+if STREAMING_JAR=$(find /opt/hadoop*/share/hadoop/tools/lib/ -name "hadoop-streaming-*.jar" -print -quit); then
+    :
+else
+    RC=$?
+    log ERROR submission "operation=find_streaming_jar exit_code=$RC"
+    exit "$RC"
+fi
 if [ -z "$STREAMING_JAR" ]; then
-    echo "ERROR: hadoop-streaming jar not found"
+    log CRITICAL submission "operation=find_streaming_jar result=not_found"
     exit 1
 fi
 
-# Build file list — include all referenced scripts
-FILE_ARGS="-file /tmp/batch/mapreduce_job/$MAPPER -file /tmp/batch/mapreduce_job/$REDUCER"
+# Build the Streaming -file arguments for all referenced scripts.
+# If mapper == reducer (e.g. reducer.py used by many tasks) dedup to avoid
+# "file already added" errors that some Hadoop versions raise.
+FILE_ARGS=(-file "/tmp/batch/mapreduce_job/streaming_runner.py"
+    -file "/tmp/batch/mapreduce_job/$MAPPER")
+if [ "$REDUCER" != "$MAPPER" ]; then
+    FILE_ARGS+=(-file "/tmp/batch/mapreduce_job/$REDUCER")
+fi
 
-echo "[3/4] Running mapper=$MAPPER reducer=$REDUCER → output=$OUTPUT"
-hadoop jar "$STREAMING_JAR" \
+echo "[3/4] Running mapper=$MAPPER reducer=$REDUCER → staging=$STAGING"
+log INFO submission "streaming_jar=$STREAMING_JAR mapper=$MAPPER reducer=$REDUCER output=$STAGING"
+if hadoop jar "$STREAMING_JAR" \
+    -D mapreduce.job.name="BDA-$TASK-$BDA_JOB_ID" \
     -D dfs.client.use.datanode.hostname=false \
     -D yarn.app.mapreduce.am.resource.mb=512 \
     -D yarn.app.mapreduce.am.command-opts="-Xmx384m" \
@@ -98,18 +190,35 @@ hadoop jar "$STREAMING_JAR" \
     -D mapreduce.reduce.env="HADOOP_MAPRED_HOME=/opt/hadoop-3.2.1" \
     -D mapreduce.application.classpath="/opt/hadoop-3.2.1/share/hadoop/mapreduce/*:/opt/hadoop-3.2.1/share/hadoop/mapreduce/lib/*" \
     -input /user/data/raw_logs/access_log \
-    -output "$OUTPUT" \
-    -mapper "python3 $MAPPER" \
-    -reducer "python3 $REDUCER" \
-    $FILE_ARGS
-
-RC=$?
-if [ $RC -ne 0 ]; then
-    echo "ERROR: Hadoop Streaming job failed with exit code $RC"
-    exit $RC
+    -output "$STAGING" \
+    -cmdenv "BDA_JOB_ID=$BDA_JOB_ID" \
+    -cmdenv "BDA_TASK_ID=$BDA_TASK_ID" \
+    -mapper "python3 streaming_runner.py mapper $MAPPER" \
+    -reducer "python3 streaming_runner.py reducer $REDUCER" \
+    "${FILE_ARGS[@]}"; then
+    :
+else
+    RC=$?
+    log ERROR submission "operation=hadoop_streaming exit_code=$RC application_id=see_driver_log output=$STAGING"
+    python3 /tmp/batch/mapreduce_job/publish_output.py \
+        --task "$TASK" --final "$OUTPUT" --staging "$STAGING" \
+        --job-id "$BDA_JOB_ID" --driver-exit-code "$RC" || true
+    exit "$RC"
 fi
 
-echo "[4/4] Output: $OUTPUT"
-hdfs dfs -cat "$OUTPUT"/part-* | head -50
+echo "[4/4] Validating and publishing output: $OUTPUT"
+if python3 /tmp/batch/mapreduce_job/publish_output.py \
+    --task "$TASK" --final "$OUTPUT" --staging "$STAGING" --job-id "$BDA_JOB_ID"; then
+    :
+else
+    RC=$?
+    log ERROR output_publish "operation=publish_staged_output exit_code=$RC application_id=see_driver_log staging=$STAGING final=$OUTPUT"
+    exit 1
+fi
 
+if ! run_hdfs output_summary hdfs dfs -count "$OUTPUT"; then
+    log WARNING output_summary "operation=hdfs_dfs_count path=$OUTPUT result=summary_unavailable output_remains_published=true"
+fi
+
+log INFO job.completed "output=$OUTPUT result=success"
 echo "=== Done ==="

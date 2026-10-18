@@ -13,3 +13,7 @@ data/raw/access_log
 data/raw/*.gz
 data/raw/clarknet*
 !data/raw/.gitkeep
+.env.render
+.test-tmp/
+
+

@@ -1,4 +1,3 @@
-version: "3.8"
 
 services:
   # ─── HDFS ─────────────────────────────────────────────────
@@ -81,6 +80,12 @@ services:
       - "8088:8088"
     volumes:
       - ./hadoop-conf/capacity-scheduler.xml:/etc/hadoop/capacity-scheduler.xml
+    healthcheck:
+      test: ["CMD", "bash", "-c", "curl -sf http://localhost:8088/ws/v1/cluster/info || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     environment:
       - SERVICE_PRECONDITION=namenode:9000 namenode:9870 datanode:9864
     env_file:
@@ -131,7 +136,7 @@ services:
       - "9083:9083"
     environment:
       - SERVICE_PRECONDITION=namenode:9870 datanode:9864 hive-metastore-postgresql:5432
-      - HADOOP_HEAPSIZE=2048
+      - HADOOP_HEAPSIZE=512
       - HIVE_SITE_CONF_javax_jdo_option_ConnectionURL=jdbc:postgresql://hive-metastore-postgresql/metastore
       - HIVE_SITE_CONF_javax_jdo_option_ConnectionDriverName=org.postgresql.Driver
       - HIVE_SITE_CONF_javax_jdo_option_ConnectionUserName=hive
@@ -157,7 +162,7 @@ services:
       - "10002:10002"
     environment:
       - SERVICE_PRECONDITION=hive-metastore:9083
-      - HADOOP_HEAPSIZE=2048
+      - HADOOP_HEAPSIZE=512
       - HIVE_SITE_CONF_javax_jdo_option_ConnectionURL=jdbc:postgresql://hive-metastore-postgresql/metastore
       - HIVE_SITE_CONF_javax_jdo_option_ConnectionDriverName=org.postgresql.Driver
       - HIVE_SITE_CONF_javax_jdo_option_ConnectionUserName=hive
@@ -193,7 +198,7 @@ services:
     environment:
       - SPARK_MASTER=spark://spark-master:7077
       - SPARK_WORKER_CORES=2
-      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_MEMORY=1G
       - SPARK_DAEMON_MEMORY=512m
     env_file:
       - ./hadoop.env
