@@ -218,16 +218,85 @@ The platform uses the official **ClarkNet HTTP Access Log** from the Internet Tr
    chmod +x start.sh stop.sh
    ```
 
-3. **Start the laboratory**:
+3. **Start the laboratory locally**:
    ```bash
    ./start.sh
    ```
 
-4. **Open in Browser**:
-   * **Laboratory UI**: [http://localhost:3000](http://localhost:3000)
-   * **API Documentation**: [http://localhost:8000/docs](http://localhost:8000/docs)
-   * **HDFS NameNode**: [http://localhost:9870](http://localhost:9870)
-   * **YARN ResourceManager**: [http://localhost:8088](http://localhost:8088)
+4. **Start with Render (Local Cluster + Cloudflare Tunnel + Live Render URL)**:
+   ```bash
+   # Terminal 1: Start local cluster
+   ./start.sh
+
+   # Terminal 2: Connect tunnel and sync to Render
+   ./scripts/deploy_render.sh
+   ```
+
+5. **Stop the laboratory**:
+   Press **`Ctrl+C`** in the terminal running `./start.sh`, or run:
+   ```bash
+   ./stop.sh
+   ```
+
+---
+
+### 📊 System Key Numbers & Scale
+
+| Metric | Specification | Details |
+|---|---|---|
+| **Raw Dataset** | ClarkNet HTTP Traces | Internet Traffic Archive (ITA), August–September 1995 |
+| **Total Log Records** | **3,328,632 lines** | 100% uncompressed Common Log Format (CLF) |
+| **Raw Uncompressed Size** | **343.4 MB** | Ingested into HDFS at `/user/data/raw_logs/access_log` |
+| **HDFS Distributed Storage** | **1.03 GB** | 3 DataNodes with $3\times$ replication factor ($3 \times 343.4\text{ MB} = 9\text{ blocks}$) |
+| **MapReduce Task Catalog** | **25 Tasks** | 4 analytical categories (Volume, Status, Traffic, Security) |
+| **Infrastructure Containers** | **12 Docker Services** | NameNode, 3 DataNodes, RM, NM, Spark Master, Spark Worker, Hive Metastore, Hive Server, PostgreSQL, MongoDB |
+| **Stream Algorithms** | **3 Probabilistic Lab Engines** | Bloom Filter ($k=4$), DGIM ($N=1000$ window), Flajolet-Martin ($R$ bit hashing) + EWMA forecasting |
+
+---
+
+### 🔌 Network Ports & Access Points
+
+| Service | Host Port | Container Port | Protocol / Purpose |
+|---|---|---|---|
+| **Laboratory Dashboard** | `3000` | `3000` | React 18 + Vite Web UI |
+| **FastAPI Backend** | `8000` | `8000` | REST API & WebSockets (`/ws/stream`) |
+| **HDFS NameNode Web** | `9870` | `9870` | HDFS Web UI & WebHDFS REST API |
+| **HDFS NameNode RPC** | `9000` | `9000` | Hadoop IPC / Filesystem RPC |
+| **HDFS DataNode 1 / 2 / 3** | `9864`, `9865`, `9866` | `9864` | DataNode HTTP Block Transfer |
+| **YARN ResourceManager** | `8088` | `8088` | YARN Web UI & Cluster REST API |
+| **YARN NodeManager** | `8042` | `8042` | NodeManager Web UI & Container Status |
+| **Spark Master Web UI** | `8080` | `8080` | Spark Cluster Overview |
+| **Spark Master RPC** | `7077` | `7077` | Spark Standalone Master URL |
+| **Spark Worker Web UI** | `8081` | `8081` | Spark Worker Executor Status |
+| **MongoDB Database** | `27018` | `27017` | Real-time Stream Analytics Storage |
+| **Hive Metastore** | `9083` | `9083` | Hive Metastore Thrift Service |
+| **Hive Server 2** | `10000` | `10000` | Hive JDBC / ODBC Query Engine |
+| **Render Hosted Dashboard** | `443` (HTTPS) | — | Public Web URL: [log-analyzer-ylrz.onrender.com](https://log-analyzer-ylrz.onrender.com) |
+
+---
+
+### 🛠 Command Reference Cheat Sheet
+
+```bash
+# ── Local Development ─────────────────────────────────────────
+./start.sh                  # Start all 12 containers, API, and UI locally
+./stop.sh                   # Stop all local services gracefully (or press Ctrl+C)
+
+# ── Cloudflare Tunnel & Render Deploy ─────────────────────────
+./scripts/deploy_render.sh  # Auto-start tunnel, copy URL to clipboard, sync & deploy to Render
+./scripts/tunnel.sh start   # Start Cloudflare Tunnel in background (copies URL)
+./scripts/tunnel.sh status  # Verify tunnel proxy connectivity
+./scripts/tunnel.sh url     # Output current active tunnel URL
+./scripts/tunnel.sh stop    # Stop Cloudflare Tunnel
+
+# ── Cluster Diagnostics & Verification ─────────────────────────
+docker compose ps           # Check container health (NameNode, DataNodes, YARN, Spark)
+curl http://localhost:8000/api/health       # Query full stack health status
+curl http://localhost:8000/api/hdfs/fsck    # Run HDFS block consistency check
+curl http://localhost:8000/api/hdfs/report  # Check DataNodes storage capacity
+```
+
+---
 
 ### Destructive HDFS recovery
 

@@ -15,5 +15,6 @@ data/raw/clarknet*
 !data/raw/.gitkeep
 .env.render
 .test-tmp/
+.pytest_cache/
 
 
